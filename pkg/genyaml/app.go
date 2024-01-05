@@ -16,6 +16,7 @@ func NewGenYamlApp(yamlname string, command *cobra.Command) *app.App {
 		app.WithOptions(opts),
 		app.WithDescription(commandDesc),
 		app.WithDefaultValidArgs(),
+		app.WithNoConfig(),
 		app.WithRunFunc(run(opts, command)),
 	)
 
