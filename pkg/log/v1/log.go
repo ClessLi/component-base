@@ -202,18 +202,52 @@ var (
 )
 
 // Init initializes logger with specified options.
-func Init(opts *Options) {
+func Init(opts ...*Options) {
 	mu.Lock()
 	defer mu.Unlock()
-	std = New(opts)
+	std = New(opts...)
 }
 
 // New create logger by opts which can custmoized by command arguments.
-func New(opts *Options) *zapLogger {
+func New(opts ...*Options) *zapLogger {
 	if opts == nil {
-		opts = NewOptions()
+		opts = []*Options{NewOptions()}
 	}
 
+	var err error
+	l, err := creatConfigByOptions(opts[0]).Build(zap.AddStacktrace(zapcore.PanicLevel), zap.AddCallerSkip(1), zap.WrapCore(func(mainCore zapcore.Core) zapcore.Core {
+		if len(opts) > 1 {
+			cores := []zapcore.Core{mainCore}
+			for _, o := range opts[1:] {
+				l, err := creatConfigByOptions(o).Build(zap.AddStacktrace(zapcore.PanicLevel), zap.AddCallerSkip(1))
+				if err != nil {
+					panic(err)
+				}
+
+				cores = append(cores, l.Core())
+			}
+
+			return zapcore.NewTee(cores...)
+		}
+		return mainCore
+	}))
+	if err != nil {
+		panic(err)
+	}
+	logger := &zapLogger{
+		zapLogger: l.Named(opts[0].Name),
+		infoLogger: infoLogger{
+			log:   l,
+			level: zap.InfoLevel,
+		},
+	}
+	klog.InitLogger(l)
+	zap.RedirectStdLog(l)
+
+	return logger
+}
+
+func creatConfigByOptions(opts *Options) *zap.Config {
 	var zapLevel zapcore.Level
 	if err := zapLevel.UnmarshalText([]byte(opts.Level)); err != nil {
 		zapLevel = zapcore.InfoLevel
@@ -238,7 +272,7 @@ func New(opts *Options) *zapLogger {
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
 
-	loggerConfig := &zap.Config{
+	return &zap.Config{
 		Level:             zap.NewAtomicLevelAt(zapLevel),
 		Development:       opts.Development,
 		DisableCaller:     opts.DisableCaller,
@@ -252,23 +286,6 @@ func New(opts *Options) *zapLogger {
 		OutputPaths:      opts.OutputPaths,
 		ErrorOutputPaths: opts.ErrorOutputPaths,
 	}
-
-	var err error
-	l, err := loggerConfig.Build(zap.AddStacktrace(zapcore.PanicLevel), zap.AddCallerSkip(1))
-	if err != nil {
-		panic(err)
-	}
-	logger := &zapLogger{
-		zapLogger: l.Named(opts.Name),
-		infoLogger: infoLogger{
-			log:   l,
-			level: zap.InfoLevel,
-		},
-	}
-	klog.InitLogger(l)
-	zap.RedirectStdLog(l)
-
-	return logger
 }
 
 // StdLogger returns global std logger.

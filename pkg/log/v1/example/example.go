@@ -28,7 +28,7 @@ func main() {
 	}
 
 	// logger配置
-	opts := &log.Options{
+	stdOpts := &log.Options{
 		Level:            "debug",
 		Format:           "console",
 		EnableColor:      true,
@@ -36,8 +36,17 @@ func main() {
 		OutputPaths:      []string{"test.log", "stdout"},
 		ErrorOutputPaths: []string{"error.log", "stderr"},
 	}
+
+	errOpts := &log.Options{
+		Level:            "error",
+		Format:           "console",
+		EnableColor:      true,
+		DisableCaller:    true,
+		OutputPaths:      []string{"error2.log"},
+		ErrorOutputPaths: []string{},
+	}
 	// 初始化全局logger
-	log.Init(opts)
+	log.Init(stdOpts, errOpts)
 	defer log.Flush()
 
 	// Debug、Info(with field)、Warnf、Errorw使用
