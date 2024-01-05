@@ -41,6 +41,6 @@ func (c *Config) Complete() CompletedConfig {
 	return CompletedConfig{c}
 }
 
-func (c CompletedConfig) NewServer() (*GenerateYamlServer, error) {
-	return &GenerateYamlServer{YamlInfo: c.YamlInfo}, nil
+func (c CompletedConfig) NewServer() (*GenConfigServer, error) {
+	return &GenConfigServer{YamlInfo: c.YamlInfo}, nil
 }

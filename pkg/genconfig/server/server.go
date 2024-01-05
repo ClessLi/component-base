@@ -9,11 +9,11 @@ import (
 	"strings"
 )
 
-type GenerateYamlServer struct {
+type GenConfigServer struct {
 	YamlInfo *YamlInfo
 }
 
-func (g *GenerateYamlServer) GenYaml(command *cobra.Command) error {
+func (g *GenConfigServer) GenYaml(command *cobra.Command) error {
 	err := g.genYaml(command)
 	if err != nil {
 		return err
@@ -27,7 +27,7 @@ func (g *GenerateYamlServer) GenYaml(command *cobra.Command) error {
 	return nil
 }
 
-func (g *GenerateYamlServer) genYaml(command *cobra.Command) error {
+func (g *GenConfigServer) genYaml(command *cobra.Command) error {
 	doc := cmdDoc{}
 
 	doc.Name = command.Name()

@@ -1,7 +1,7 @@
-package genyaml
+package genconfig
 
 import (
-	"github.com/ClessLi/component-base/pkg/genyaml/server"
+	"github.com/ClessLi/component-base/pkg/genconfig/server"
 	"github.com/spf13/cobra"
 )
 
