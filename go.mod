@@ -3,6 +3,7 @@ module github.com/ClessLi/component-base
 go 1.21
 
 require (
+	github.com/dominikbraun/graph v0.23.0
 	github.com/fatih/color v1.16.0
 	github.com/go-kit/kit v0.13.0
 	github.com/gosuri/uitable v0.0.4
@@ -13,6 +14,7 @@ require (
 	github.com/spf13/pflag v1.0.5
 	github.com/spf13/viper v1.18.2
 	go.uber.org/zap v1.26.0
+	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/klog v1.0.0
 )
 
@@ -46,5 +48,4 @@ require (
 	golang.org/x/sys v0.15.0 // indirect
 	golang.org/x/text v0.14.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
