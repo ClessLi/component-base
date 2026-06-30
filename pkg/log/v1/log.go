@@ -3,9 +3,10 @@ package v1
 import (
 	"context"
 	"fmt"
-	"github.com/ClessLi/component-base/pkg/log/v1/klog"
 	"log"
 	"sync"
+
+	"github.com/ClessLi/component-base/pkg/log/v1/klog"
 
 	kitlog "github.com/go-kit/kit/log"
 	kitzaplog "github.com/go-kit/kit/log/zap"
@@ -25,7 +26,7 @@ type InfoLogger interface {
 	Infof(format string, v ...interface{})
 	Infow(msg string, keysAndValues ...interface{})
 
-	KigLogger() kitlog.Logger
+	KitLogger() kitlog.Logger
 
 	// Enabled tests whether this InfoLogger is enabled.  For example,
 	// commandline flags might be used to set the logging verbosity and disable
@@ -95,7 +96,7 @@ func (l *noopInfoLogger) Enabled() bool                    { return false }
 func (l *noopInfoLogger) Info(_ string, _ ...Field)        {}
 func (l *noopInfoLogger) Infof(_ string, _ ...interface{}) {}
 func (l *noopInfoLogger) Infow(_ string, _ ...interface{}) {}
-func (l *noopInfoLogger) KigLogger() kitlog.Logger         { return nil }
+func (l *noopInfoLogger) KitLogger() kitlog.Logger         { return nil }
 
 var disabledInfoLogger = &noopInfoLogger{}
 
@@ -133,7 +134,7 @@ func (l *infoLogger) Infow(msg string, keysAndValues ...interface{}) {
 	}
 }
 
-func (l *infoLogger) KigLogger() kitlog.Logger {
+func (l *infoLogger) KitLogger() kitlog.Logger {
 	return kitzaplog.NewZapSugarLogger(l.log, l.level)
 }
 
@@ -582,5 +583,5 @@ func (l *zapLogger) clone() *zapLogger {
 }
 
 func K() kitlog.Logger {
-	return std.clone().KigLogger()
+	return std.clone().KitLogger()
 }
