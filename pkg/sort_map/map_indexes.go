@@ -8,6 +8,7 @@ import (
 type MapIndexes[K cmp.Ordered] interface {
 	Insert(key K)
 	Remove(key K)
+	GetKey(idx int) K
 	Keys() iter.Seq[int]
 	Range() iter.Seq2[int, K]
 }
@@ -16,6 +17,13 @@ type mapIndexes[K cmp.Ordered] []K
 
 func (mi *mapIndexes[K]) Insert(key K) {
 	idx, _ := bSearchFirstGT[K](*mi, key)
+	if idx == -1 {
+		if n := len(*mi); n > 0 && (*mi)[n-1] == key {
+			return
+		}
+	} else if idx > 0 && (*mi)[idx-1] == key {
+		return
+	}
 	mi.insert(idx, key)
 }
 
@@ -26,6 +34,10 @@ func (mi *mapIndexes[K]) Remove(key K) {
 			return
 		}
 	}
+}
+
+func (mi *mapIndexes[K]) GetKey(idx int) K {
+	return (*mi)[idx]
 }
 
 func (mi *mapIndexes[K]) Keys() iter.Seq[int] {
@@ -83,4 +95,27 @@ func (mi *mapIndexes[K]) insert(index int, key K) {
 		(*mi)[i] = (*mi)[i-1]
 	}
 	(*mi)[index] = key
+}
+
+func bSearchFirstFreeIndex(indexes *mapIndexes[int]) int {
+	return bSearchFirstFreeIndexInternally(indexes, 0, len(*indexes)-1)
+}
+
+func bSearchFirstFreeIndexInternally(indexes *mapIndexes[int], low, high int) int {
+	if low > high {
+		return low
+	}
+	if indexes.GetKey(low) > low {
+		return low
+	}
+	mid := low + ((high - low) >> 1)
+	if indexes.GetKey(mid) > mid {
+		return bSearchFirstFreeIndexInternally(indexes, low, mid)
+	} else {
+		return bSearchFirstFreeIndexInternally(indexes, mid+1, high)
+	}
+}
+
+func lastFreeIndex(indexes *mapIndexes[int]) int {
+	return indexes.GetKey(len(*indexes)-1) + 1
 }

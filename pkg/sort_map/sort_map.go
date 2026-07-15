@@ -1,20 +1,28 @@
 package sort_map
 
-//go:generate mockgen -self_package=github.com/ClessLi/component-base/pkg/sort_map -destination=mock_sort_map.go -package=sort_map github.com/ClessLi/component-base/pkg/sort_map SortMap,MapIndexes
+//go:generate mockgen -self_package=github.com/ClessLi/component-base/pkg/sort_map -destination=mock_sort_map.go -package=sort_map github.com/ClessLi/component-base/pkg/sort_map SortMap,MapList,MapIndexes
 import (
 	"cmp"
+	"encoding/json"
 	"iter"
 	"sync"
+
+	"github.com/marmotedu/errors"
+	"gopkg.in/yaml.v3"
 )
 
 type SortMap[K cmp.Ordered, V any] interface {
-	Insert(key K, value V) error
-	GetByKey(key K) (v V, ok bool)
-	RemoveByKey(key K) error
+	Set(key K, value V) (oldValue V, present bool)
+	Get(key K) (value V, present bool)
+	RemoveByKey(key K)
 	Keys() iter.Seq[K]
 	Range() iter.Seq2[K, V]
 	Indexes() iter.Seq[int]
 	RangeWithIndex() iter.Seq2[int, V]
+	json.Unmarshaler
+	json.Marshaler
+	yaml.Unmarshaler
+	yaml.Marshaler
 }
 
 type sortMap[K cmp.Ordered, V any] struct {
@@ -23,30 +31,28 @@ type sortMap[K cmp.Ordered, V any] struct {
 	indexList MapIndexes[K]
 }
 
-func (s *sortMap[K, V]) Insert(key K, value V) error {
+func (s *sortMap[K, V]) Set(key K, value V) (oldValue V, present bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.dataMap[key]; !ok {
-		s.indexList.Insert(key)
-	}
+	oldValue, present = s.dataMap[key]
 	s.dataMap[key] = value
-	return nil
-}
-
-func (s *sortMap[K, V]) GetByKey(key K) (v V, ok bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	v, ok = s.dataMap[key]
+	s.indexList.Insert(key)
 	return
 }
 
-func (s *sortMap[K, V]) RemoveByKey(key K) error {
+func (s *sortMap[K, V]) Get(key K) (value V, present bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	value, present = s.dataMap[key]
+	return
+}
+
+func (s *sortMap[K, V]) RemoveByKey(key K) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.dataMap, key)
 	s.indexList.Remove(key)
-	return nil
 }
 
 func (s *sortMap[K, V]) Keys() iter.Seq[K] {
@@ -95,6 +101,60 @@ func (s *sortMap[K, V]) RangeWithIndex() iter.Seq2[int, V] {
 			}
 		}
 	}
+}
+
+func (s *sortMap[K, V]) UnmarshalJSON(bytes []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var data map[K]V
+	if err := json.Unmarshal(bytes, &data); err != nil {
+		return err
+	}
+
+	s.dataMap = data
+	s.indexList = NewMapIndexes[K]()
+	for k := range data {
+		s.indexList.Insert(k)
+	}
+
+	return nil
+}
+
+func (s *sortMap[K, V]) MarshalJSON() ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return json.Marshal(s.dataMap)
+}
+
+func (s *sortMap[K, V]) UnmarshalYAML(value *yaml.Node) error {
+	if value == nil {
+		return errors.New("nil yaml node")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var data map[K]V
+	if err := value.Decode(&data); err != nil {
+		return err
+	}
+
+	s.dataMap = data
+	s.indexList = NewMapIndexes[K]()
+	for k := range data {
+		s.indexList.Insert(k)
+	}
+
+	return nil
+}
+
+func (s *sortMap[K, V]) MarshalYAML() (interface{}, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.dataMap, nil
 }
 
 func Map[K cmp.Ordered, V any]() SortMap[K, V] {

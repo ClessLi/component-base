@@ -181,75 +181,109 @@ func Test_mapIndexes_Insert(t *testing.T) {
 		key K
 	}
 	type testCase[K cmp.Ordered] struct {
-		name string
-		mi   mapIndexes[K]
-		args args[K]
+		name     string
+		mi       mapIndexes[K]
+		args     args[K]
+		wantKeys []K
 	}
 	tests := []testCase[int]{
 		{
-			name: "insert into empty slice",
-			mi:   mapIndexes[int]{},
-			args: args[int]{key: 5},
+			name:     "insert into empty slice",
+			mi:       mapIndexes[int]{},
+			args:     args[int]{key: 5},
+			wantKeys: []int{5},
 		},
 		{
-			name: "insert at beginning",
-			mi:   mapIndexes[int]{10, 20, 30},
-			args: args[int]{key: 5},
+			name:     "insert at beginning",
+			mi:       mapIndexes[int]{10, 20, 30},
+			args:     args[int]{key: 5},
+			wantKeys: []int{5, 10, 20, 30},
 		},
 		{
-			name: "insert at end",
-			mi:   mapIndexes[int]{10, 20, 30},
-			args: args[int]{key: 40},
+			name:     "insert at end",
+			mi:       mapIndexes[int]{10, 20, 30},
+			args:     args[int]{key: 40},
+			wantKeys: []int{10, 20, 30, 40},
 		},
 		{
-			name: "insert in middle",
-			mi:   mapIndexes[int]{10, 30, 50},
-			args: args[int]{key: 25},
+			name:     "insert in middle",
+			mi:       mapIndexes[int]{10, 30, 50},
+			args:     args[int]{key: 25},
+			wantKeys: []int{10, 25, 30, 50},
 		},
 		{
-			name: "insert duplicate value",
-			mi:   mapIndexes[int]{10, 20, 30},
-			args: args[int]{key: 20},
+			name:     "insert duplicate value is ignored",
+			mi:       mapIndexes[int]{10, 20, 30},
+			args:     args[int]{key: 20},
+			wantKeys: []int{10, 20, 30},
 		},
 		{
-			name: "insert between first two elements",
-			mi:   mapIndexes[int]{10, 20},
-			args: args[int]{key: 15},
+			name:     "insert between first two elements",
+			mi:       mapIndexes[int]{10, 20},
+			args:     args[int]{key: 15},
+			wantKeys: []int{10, 15, 20},
 		},
 		{
-			name: "insert between last two elements",
-			mi:   mapIndexes[int]{10, 20, 30},
-			args: args[int]{key: 25},
+			name:     "insert between last two elements",
+			mi:       mapIndexes[int]{10, 20, 30},
+			args:     args[int]{key: 25},
+			wantKeys: []int{10, 20, 25, 30},
 		},
 		{
-			name: "insert negative value at beginning",
-			mi:   mapIndexes[int]{-5, 0, 5},
-			args: args[int]{key: -10},
+			name:     "insert negative value at beginning",
+			mi:       mapIndexes[int]{-5, 0, 5},
+			args:     args[int]{key: -10},
+			wantKeys: []int{-10, -5, 0, 5},
 		},
 		{
-			name: "insert negative value in middle",
-			mi:   mapIndexes[int]{-10, 0, 10},
-			args: args[int]{key: -5},
+			name:     "insert negative value in middle",
+			mi:       mapIndexes[int]{-10, 0, 10},
+			args:     args[int]{key: -5},
+			wantKeys: []int{-10, -5, 0, 10},
 		},
 		{
-			name: "insert single element greater",
-			mi:   mapIndexes[int]{10},
-			args: args[int]{key: 5},
+			name:     "insert single element greater",
+			mi:       mapIndexes[int]{10},
+			args:     args[int]{key: 5},
+			wantKeys: []int{5, 10},
 		},
 		{
-			name: "insert single element less",
-			mi:   mapIndexes[int]{5},
-			args: args[int]{key: 10},
+			name:     "insert single element less",
+			mi:       mapIndexes[int]{5},
+			args:     args[int]{key: 10},
+			wantKeys: []int{5, 10},
 		},
 		{
-			name: "insert into large sorted array",
-			mi:   mapIndexes[int]{2, 4, 6, 8, 10, 12, 14, 16, 18, 20},
-			args: args[int]{key: 11},
+			name:     "insert into large sorted array",
+			mi:       mapIndexes[int]{2, 4, 6, 8, 10, 12, 14, 16, 18, 20},
+			args:     args[int]{key: 11},
+			wantKeys: []int{2, 4, 6, 8, 10, 11, 12, 14, 16, 18, 20},
+		},
+		{
+			name:     "insert duplicate at first position is ignored",
+			mi:       mapIndexes[int]{10, 20, 30},
+			args:     args[int]{key: 10},
+			wantKeys: []int{10, 20, 30},
+		},
+		{
+			name:     "insert duplicate at last position is ignored",
+			mi:       mapIndexes[int]{10, 20, 30},
+			args:     args[int]{key: 30},
+			wantKeys: []int{10, 20, 30},
+		},
+		{
+			name:     "insert multiple duplicates is ignored",
+			mi:       mapIndexes[int]{10, 20},
+			args:     args[int]{key: 20},
+			wantKeys: []int{10, 20},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tt.mi.Insert(tt.args.key)
+			if !reflect.DeepEqual([]int(tt.mi), tt.wantKeys) {
+				t.Errorf("Set() keys = %v, want %v", []int(tt.mi), tt.wantKeys)
+			}
 		})
 	}
 }
@@ -493,4 +527,216 @@ func Test_mapIndexes_Remove(t *testing.T) {
 			}
 		})
 	}
+}
+
+func Test_bSearchFirstFreeIndex(t *testing.T) {
+	type args struct {
+		indexes *mapIndexes[int]
+	}
+	tests := []struct {
+		name string
+		args args
+		want int
+	}{
+		{
+			name: "empty slice",
+			args: args{indexes: &mapIndexes[int]{}},
+			want: 0,
+		},
+		{
+			name: "single element index 0",
+			args: args{indexes: &mapIndexes[int]{0}},
+			want: 1,
+		},
+		{
+			name: "single element index greater than 0",
+			args: args{indexes: &mapIndexes[int]{5}},
+			want: 0,
+		},
+		{
+			name: "consecutive indexes starting from 0",
+			args: args{indexes: &mapIndexes[int]{0, 1, 2, 3, 4}},
+			want: 5,
+		},
+		{
+			name: "first index missing",
+			args: args{indexes: &mapIndexes[int]{1, 2, 3, 4}},
+			want: 0,
+		},
+		{
+			name: "gap in middle",
+			args: args{indexes: &mapIndexes[int]{0, 1, 3, 4, 5}},
+			want: 2,
+		},
+		{
+			name: "gap at beginning",
+			args: args{indexes: &mapIndexes[int]{2, 3, 4, 5}},
+			want: 0,
+		},
+		{
+			name: "gap at end",
+			args: args{indexes: &mapIndexes[int]{0, 1, 2, 4}},
+			want: 3,
+		},
+		{
+			name: "multiple gaps return first",
+			args: args{indexes: &mapIndexes[int]{0, 2, 4, 6}},
+			want: 1,
+		},
+		{
+			name: "all indexes shifted by 1",
+			args: args{indexes: &mapIndexes[int]{1, 2, 3}},
+			want: 0,
+		},
+		{
+			name: "all indexes shifted by 2",
+			args: args{indexes: &mapIndexes[int]{2, 3, 4}},
+			want: 0,
+		},
+		{
+			name: "two elements no gap",
+			args: args{indexes: &mapIndexes[int]{0, 1}},
+			want: 2,
+		},
+		{
+			name: "two elements with gap",
+			args: args{indexes: &mapIndexes[int]{0, 2}},
+			want: 1,
+		},
+		{
+			name: "large consecutive array",
+			args: args{indexes: &mapIndexes[int]{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}},
+			want: 10,
+		},
+		{
+			name: "large array with gap in middle",
+			args: args{indexes: &mapIndexes[int]{0, 1, 2, 3, 5, 6, 7, 8, 9}},
+			want: 4,
+		},
+		{
+			name: "sparse indexes",
+			args: args{indexes: &mapIndexes[int]{10, 20, 30}},
+			want: 0,
+		},
+		{
+			name: "gap after first element",
+			args: args{indexes: &mapIndexes[int]{0, 10, 20}},
+			want: 1,
+		},
+		{
+			name: "single gap at position 1",
+			args: args{indexes: &mapIndexes[int]{0, 2, 3, 4}},
+			want: 1,
+		},
+		{
+			name: "very large single index",
+			args: args{indexes: &mapIndexes[int]{1000000}},
+			want: 0,
+		},
+		{
+			name: "three elements no gap",
+			args: args{indexes: &mapIndexes[int]{0, 1, 2}},
+			want: 3,
+		},
+		{
+			name: "gap at last position",
+			args: args{indexes: &mapIndexes[int]{0, 1, 2, 3, 5}},
+			want: 4,
+		},
+		{
+			name: "three elements gap at end",
+			args: args{indexes: &mapIndexes[int]{0, 1, 3}},
+			want: 2,
+		},
+		{
+			name: "three elements gap at start",
+			args: args{indexes: &mapIndexes[int]{1, 2, 3}},
+			want: 0,
+		},
+		{
+			name: "consecutive starting from non-zero",
+			args: args{indexes: &mapIndexes[int]{5, 6, 7, 8}},
+			want: 0,
+		},
+		{
+			name: "gap immediately after zero",
+			args: args{indexes: &mapIndexes[int]{0, 5, 6, 7}},
+			want: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := bSearchFirstFreeIndex(tt.args.indexes); got != tt.want {
+				t.Errorf("bSearchFirstFreeIndex() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_lastFreeIndex(t *testing.T) {
+	type args struct {
+		indexes *mapIndexes[int]
+	}
+	tests := []struct {
+		name string
+		args args
+		want int
+	}{
+		{
+			name: "single element zero",
+			args: args{indexes: &mapIndexes[int]{0}},
+			want: 1,
+		},
+		{
+			name: "single element non-zero",
+			args: args{indexes: &mapIndexes[int]{5}},
+			want: 6,
+		},
+		{
+			name: "consecutive from zero",
+			args: args{indexes: &mapIndexes[int]{0, 1, 2, 3, 4}},
+			want: 5,
+		},
+		{
+			name: "consecutive from non-zero",
+			args: args{indexes: &mapIndexes[int]{10, 11, 12}},
+			want: 13,
+		},
+		{
+			name: "with gaps",
+			args: args{indexes: &mapIndexes[int]{0, 2, 4, 6}},
+			want: 7,
+		},
+		{
+			name: "negative values",
+			args: args{indexes: &mapIndexes[int]{-5, -3, -1}},
+			want: 0,
+		},
+		{
+			name: "large last value",
+			args: args{indexes: &mapIndexes[int]{0, 1, 1000}},
+			want: 1001,
+		},
+		{
+			name: "two elements",
+			args: args{indexes: &mapIndexes[int]{10, 20}},
+			want: 21,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lastFreeIndex(tt.args.indexes); got != tt.want {
+				t.Errorf("lastFreeIndex() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("empty slice panics", func(t *testing.T) {
+		defer func() {
+			if r := recover(); r == nil {
+				t.Errorf("lastFreeIndex() did not panic on empty slice")
+			}
+		}()
+		lastFreeIndex(&mapIndexes[int]{})
+	})
 }

@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 func newTestSortMap[K cmp.Ordered, V any](data map[K]V) sortMap[K, V] {
@@ -86,12 +88,12 @@ func Test_sortMap_GetByKey(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			gotV, gotOk := tt.s.GetByKey(tt.args.key)
+			gotV, gotOk := tt.s.Get(tt.args.key)
 			if !reflect.DeepEqual(gotV, tt.wantV) {
-				t.Errorf("GetByKey() gotV = %v, want %v", gotV, tt.wantV)
+				t.Errorf("Get() gotV = %v, want %v", gotV, tt.wantV)
 			}
 			if gotOk != tt.wantOk {
-				t.Errorf("GetByKey() gotOk = %v, want %v", gotOk, tt.wantOk)
+				t.Errorf("Get() gotOk = %v, want %v", gotOk, tt.wantOk)
 			}
 		})
 	}
@@ -149,7 +151,7 @@ func Test_sortMap_Indexes(t *testing.T) {
 	})
 }
 
-func Test_sortMap_Insert(t *testing.T) {
+func Test_sortMap_Set(t *testing.T) {
 	type args struct {
 		key   int
 		value string
@@ -160,40 +162,35 @@ func Test_sortMap_Insert(t *testing.T) {
 		args       args
 		wantKeys   []int
 		wantValues map[int]string
-		wantErr    bool
 	}
 	tests := []testCase{
 		{
-			name:       "insert into empty map",
+			name:       "set into empty map",
 			initial:    map[int]string{},
 			args:       args{key: 10, value: "ten"},
 			wantKeys:   []int{10},
 			wantValues: map[int]string{10: "ten"},
-			wantErr:    false,
 		},
 		{
-			name:       "insert at beginning",
+			name:       "set at beginning",
 			initial:    map[int]string{20: "twenty", 30: "thirty"},
 			args:       args{key: 10, value: "ten"},
 			wantKeys:   []int{10, 20, 30},
 			wantValues: map[int]string{10: "ten", 20: "twenty", 30: "thirty"},
-			wantErr:    false,
 		},
 		{
-			name:       "insert at end",
+			name:       "set at end",
 			initial:    map[int]string{10: "ten", 20: "twenty"},
 			args:       args{key: 30, value: "thirty"},
 			wantKeys:   []int{10, 20, 30},
 			wantValues: map[int]string{10: "ten", 20: "twenty", 30: "thirty"},
-			wantErr:    false,
 		},
 		{
-			name:       "insert in middle",
+			name:       "set in middle",
 			initial:    map[int]string{10: "ten", 30: "thirty"},
 			args:       args{key: 20, value: "twenty"},
 			wantKeys:   []int{10, 20, 30},
 			wantValues: map[int]string{10: "ten", 20: "twenty", 30: "thirty"},
-			wantErr:    false,
 		},
 		{
 			name:       "update existing key",
@@ -201,47 +198,40 @@ func Test_sortMap_Insert(t *testing.T) {
 			args:       args{key: 10, value: "TEN"},
 			wantKeys:   []int{10, 20},
 			wantValues: map[int]string{10: "TEN", 20: "twenty"},
-			wantErr:    false,
 		},
 		{
-			name:       "insert negative key",
+			name:       "set negative key",
 			initial:    map[int]string{0: "zero", 5: "five"},
 			args:       args{key: -5, value: "neg5"},
 			wantKeys:   []int{-5, 0, 5},
 			wantValues: map[int]string{-5: "neg5", 0: "zero", 5: "five"},
-			wantErr:    false,
 		},
 		{
-			name:       "insert with empty string value",
+			name:       "set with empty string value",
 			initial:    map[int]string{1: "one"},
 			args:       args{key: 2, value: ""},
 			wantKeys:   []int{1, 2},
 			wantValues: map[int]string{1: "one", 2: ""},
-			wantErr:    false,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestSortMap[int, string](tt.initial)
-			if err := s.Insert(tt.args.key, tt.args.value); (err != nil) != tt.wantErr {
-				t.Errorf("Insert() error = %v, wantErr %v", err, tt.wantErr)
+			s.Set(tt.args.key, tt.args.value)
+			var gotKeys []int
+			for k := range s.Keys() {
+				gotKeys = append(gotKeys, k)
 			}
-			if !tt.wantErr {
-				var gotKeys []int
-				for k := range s.Keys() {
-					gotKeys = append(gotKeys, k)
+			if !reflect.DeepEqual(gotKeys, tt.wantKeys) {
+				t.Errorf("Set() keys = %v, want %v", gotKeys, tt.wantKeys)
+			}
+			for k, wantV := range tt.wantValues {
+				gotV, ok := s.Get(k)
+				if !ok {
+					t.Errorf("Set() key %v not found", k)
 				}
-				if !reflect.DeepEqual(gotKeys, tt.wantKeys) {
-					t.Errorf("Insert() keys = %v, want %v", gotKeys, tt.wantKeys)
-				}
-				for k, wantV := range tt.wantValues {
-					gotV, ok := s.GetByKey(k)
-					if !ok {
-						t.Errorf("Insert() key %v not found", k)
-					}
-					if gotV != wantV {
-						t.Errorf("Insert() value[%v] = %v, want %v", k, gotV, wantV)
-					}
+				if gotV != wantV {
+					t.Errorf("Set() value[%v] = %v, want %v", k, gotV, wantV)
 				}
 			}
 		})
@@ -510,7 +500,6 @@ func Test_sortMap_RemoveByKey(t *testing.T) {
 		name       string
 		initial    map[int]string
 		args       args
-		wantErr    bool
 		wantKeys   []int
 		wantExists map[int]bool
 	}
@@ -519,7 +508,6 @@ func Test_sortMap_RemoveByKey(t *testing.T) {
 			name:       "remove from empty map",
 			initial:    map[int]string{},
 			args:       args{key: 10},
-			wantErr:    false,
 			wantKeys:   []int{},
 			wantExists: map[int]bool{10: false},
 		},
@@ -527,7 +515,6 @@ func Test_sortMap_RemoveByKey(t *testing.T) {
 			name:       "remove first key",
 			initial:    map[int]string{10: "ten", 20: "twenty", 30: "thirty"},
 			args:       args{key: 10},
-			wantErr:    false,
 			wantKeys:   []int{20, 30},
 			wantExists: map[int]bool{10: false, 20: true, 30: true},
 		},
@@ -535,7 +522,6 @@ func Test_sortMap_RemoveByKey(t *testing.T) {
 			name:       "remove last key",
 			initial:    map[int]string{10: "ten", 20: "twenty", 30: "thirty"},
 			args:       args{key: 30},
-			wantErr:    false,
 			wantKeys:   []int{10, 20},
 			wantExists: map[int]bool{10: true, 20: true, 30: false},
 		},
@@ -543,7 +529,6 @@ func Test_sortMap_RemoveByKey(t *testing.T) {
 			name:       "remove middle key",
 			initial:    map[int]string{10: "ten", 20: "twenty", 30: "thirty"},
 			args:       args{key: 20},
-			wantErr:    false,
 			wantKeys:   []int{10, 30},
 			wantExists: map[int]bool{10: true, 20: false, 30: true},
 		},
@@ -551,7 +536,6 @@ func Test_sortMap_RemoveByKey(t *testing.T) {
 			name:       "remove non-existent key",
 			initial:    map[int]string{10: "ten", 20: "twenty"},
 			args:       args{key: 99},
-			wantErr:    false,
 			wantKeys:   []int{10, 20},
 			wantExists: map[int]bool{10: true, 20: true, 99: false},
 		},
@@ -559,7 +543,6 @@ func Test_sortMap_RemoveByKey(t *testing.T) {
 			name:       "remove only key",
 			initial:    map[int]string{10: "ten"},
 			args:       args{key: 10},
-			wantErr:    false,
 			wantKeys:   []int{},
 			wantExists: map[int]bool{10: false},
 		},
@@ -567,7 +550,6 @@ func Test_sortMap_RemoveByKey(t *testing.T) {
 			name:       "remove negative key",
 			initial:    map[int]string{-10: "neg10", 0: "zero", 10: "pos10"},
 			args:       args{key: 0},
-			wantErr:    false,
 			wantKeys:   []int{-10, 10},
 			wantExists: map[int]bool{-10: true, 0: false, 10: true},
 		},
@@ -575,25 +557,21 @@ func Test_sortMap_RemoveByKey(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			s := newTestSortMap[int, string](tt.initial)
-			if err := s.RemoveByKey(tt.args.key); (err != nil) != tt.wantErr {
-				t.Errorf("RemoveByKey() error = %v, wantErr %v", err, tt.wantErr)
+			s.RemoveByKey(tt.args.key)
+			var gotKeys []int
+			for k := range s.Keys() {
+				gotKeys = append(gotKeys, k)
 			}
-			if !tt.wantErr {
-				var gotKeys []int
-				for k := range s.Keys() {
-					gotKeys = append(gotKeys, k)
-				}
-				if len(gotKeys) == 0 && len(tt.wantKeys) == 0 {
-					return
-				}
-				if !reflect.DeepEqual(gotKeys, tt.wantKeys) {
-					t.Errorf("RemoveByKey() keys = %v, want %v", gotKeys, tt.wantKeys)
-				}
-				for k, shouldExist := range tt.wantExists {
-					_, ok := s.GetByKey(k)
-					if ok != shouldExist {
-						t.Errorf("RemoveByKey() key %v exists = %v, want %v", k, ok, shouldExist)
-					}
+			if len(gotKeys) == 0 && len(tt.wantKeys) == 0 {
+				return
+			}
+			if !reflect.DeepEqual(gotKeys, tt.wantKeys) {
+				t.Errorf("RemoveByKey() keys = %v, want %v", gotKeys, tt.wantKeys)
+			}
+			for k, shouldExist := range tt.wantExists {
+				_, ok := s.Get(k)
+				if ok != shouldExist {
+					t.Errorf("RemoveByKey() key %v exists = %v, want %v", k, ok, shouldExist)
 				}
 			}
 		})
@@ -604,7 +582,6 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 	t.Run("concurrent insert get and remove", func(t *testing.T) {
 		sm := Map[int, string]()
 		var wg sync.WaitGroup
-		var errCount atomic.Int64
 
 		numGoroutines := 100
 		numOpsPerGoroutine := 100
@@ -616,17 +593,11 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 				defer wg.Done()
 				for j := 0; j < numOpsPerGoroutine; j++ {
 					key := id*numOpsPerGoroutine + j
-					if err := sm.Insert(key, "value"); err != nil {
-						errCount.Add(1)
-					}
+					sm.Set(key, "value")
 				}
 			}(i)
 		}
 		wg.Wait()
-
-		if errCount.Load() > 0 {
-			t.Errorf("Concurrent insert errors: %d", errCount.Load())
-		}
 
 		// Verify count
 		count := 0
@@ -639,7 +610,6 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 		}
 
 		// Concurrent reads and removes
-		errCount.Store(0)
 		for i := 0; i < numGoroutines; i++ {
 			wg.Add(1)
 			go func(id int) {
@@ -647,19 +617,13 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 				for j := 0; j < numOpsPerGoroutine; j++ {
 					key := id*numOpsPerGoroutine + j
 					// Concurrent read
-					_, _ = sm.GetByKey(key)
+					_, _ = sm.Get(key)
 					// Concurrent remove
-					if err := sm.RemoveByKey(key); err != nil {
-						errCount.Add(1)
-					}
+					sm.RemoveByKey(key)
 				}
 			}(i)
 		}
 		wg.Wait()
-
-		if errCount.Load() > 0 {
-			t.Errorf("Concurrent remove errors: %d", errCount.Load())
-		}
 
 		// Verify all removed
 		count = 0
@@ -683,21 +647,20 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 		// Pre-populate some data
 		for i := 0; i < 1000; i++ {
-			sm.Insert(i, i*10)
+			sm.Set(i, i*10)
 		}
 
 		// Mixed concurrent operations
 		for i := 0; i < numGoroutines; i++ {
 			wg.Add(3)
 
-			// Insert goroutines
+			// Set goroutines
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < numOpsPerGoroutine; j++ {
 					key := 1000 + id*numOpsPerGoroutine + j
-					if err := sm.Insert(key, key); err == nil {
-						insertCount.Add(1)
-					}
+					sm.Set(key, key)
+					insertCount.Add(1)
 				}
 			}(i)
 
@@ -706,7 +669,7 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 				defer wg.Done()
 				for j := 0; j < numOpsPerGoroutine; j++ {
 					key := id % 1000
-					if _, ok := sm.GetByKey(key); ok {
+					if _, ok := sm.Get(key); ok {
 						getCount.Add(1)
 					}
 				}
@@ -717,9 +680,8 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 				defer wg.Done()
 				for j := 0; j < numOpsPerGoroutine; j++ {
 					key := id % 1000
-					if err := sm.RemoveByKey(key); err == nil {
-						removeCount.Add(1)
-					}
+					sm.RemoveByKey(key)
+					removeCount.Add(1)
 				}
 			}(i)
 		}
@@ -736,7 +698,7 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 		// Pre-populate
 		for i := 0; i < 100; i++ {
-			sm.Insert(i, "value")
+			sm.Set(i, "value")
 		}
 
 		numGoroutines := 20
@@ -765,7 +727,7 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 				defer wg.Done()
 				for j := 0; j < 100; j++ {
 					key := 100 + id*100 + j
-					sm.Insert(key, "new")
+					sm.Set(key, "new")
 					sm.RemoveByKey(key)
 				}
 			}(i)
@@ -784,7 +746,7 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 		// Pre-populate
 		for i := 0; i < 50; i++ {
-			sm.Insert(i, "value")
+			sm.Set(i, "value")
 		}
 
 		numGoroutines := 10
@@ -813,7 +775,7 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 				defer wg.Done()
 				for j := 0; j < 50; j++ {
 					key := 50 + id*50 + j
-					sm.Insert(key, "new")
+					sm.Set(key, "new")
 					sm.RemoveByKey(key)
 				}
 			}(i)
@@ -837,14 +799,14 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < numOpsPerGoroutine; j++ {
-					sm.Insert(1, id*numOpsPerGoroutine+j)
+					sm.Set(1, id*numOpsPerGoroutine+j)
 				}
 			}(i)
 		}
 		wg.Wait()
 
 		// Verify key exists and has some value
-		val, ok := sm.GetByKey(1)
+		val, ok := sm.Get(1)
 		if !ok {
 			t.Error("Key 1 should exist after concurrent updates")
 		}
@@ -867,7 +829,7 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 		// Pre-populate
 		for i := 0; i < 100; i++ {
-			sm.Insert(i, "value")
+			sm.Set(i, "value")
 		}
 
 		numGoroutines := 20
@@ -896,7 +858,7 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 				defer wg.Done()
 				for j := 0; j < 100; j++ {
 					key := 100 + id*100 + j
-					sm.Insert(key, "new")
+					sm.Set(key, "new")
 					sm.RemoveByKey(key)
 				}
 			}(i)
@@ -911,7 +873,6 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 	t.Run("concurrent large dataset operations", func(t *testing.T) {
 		sm := Map[int, string]()
 		var wg sync.WaitGroup
-		var errCount atomic.Int64
 
 		numGoroutines := 50
 		numOpsPerGoroutine := 500
@@ -923,17 +884,11 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 				defer wg.Done()
 				for j := 0; j < numOpsPerGoroutine; j++ {
 					key := id*numOpsPerGoroutine + j
-					if err := sm.Insert(key, "value"); err != nil {
-						errCount.Add(1)
-					}
+					sm.Set(key, "value")
 				}
 			}(i)
 		}
 		wg.Wait()
-
-		if errCount.Load() > 0 {
-			t.Errorf("Concurrent large dataset insert errors: %d", errCount.Load())
-		}
 
 		// Verify count
 		count := 0
@@ -948,15 +903,15 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 	t.Run("iterator deferred consumption", func(t *testing.T) {
 		sm := Map[int, string]()
-		sm.Insert(1, "one")
-		sm.Insert(2, "two")
-		sm.Insert(3, "three")
+		sm.Set(1, "one")
+		sm.Set(2, "two")
+		sm.Set(3, "three")
 
 		// Get iterator
 		keysIter := sm.Keys()
 
 		// Modify data before consuming iterator
-		sm.Insert(4, "four")
+		sm.Set(4, "four")
 		sm.RemoveByKey(2)
 
 		// Consume iterator
@@ -977,7 +932,7 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 		// Pre-populate
 		for i := 0; i < 100; i++ {
-			sm.Insert(i, i)
+			sm.Set(i, i)
 		}
 
 		numGoroutines := 10
@@ -996,14 +951,14 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 			}
 		}()
 
-		// Insert goroutines
+		// Set goroutines
 		for i := 0; i < numGoroutines; i++ {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
 				for j := 0; j < 100; j++ {
 					key := 100 + id*100 + j
-					sm.Insert(key, key)
+					sm.Set(key, key)
 				}
 			}(i)
 		}
@@ -1014,9 +969,9 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 	t.Run("yield callback deadlock detection - Keys", func(t *testing.T) {
 		sm := Map[int, string]()
-		sm.Insert(1, "one")
-		sm.Insert(2, "two")
-		sm.Insert(3, "three")
+		sm.Set(1, "one")
+		sm.Set(2, "two")
+		sm.Set(3, "three")
 
 		done := make(chan bool, 1)
 		go func() {
@@ -1025,8 +980,8 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 			for range sm.Keys() {
 				count++
 				if count == 2 {
-					// This will deadlock: yield holds RLock, Insert needs Lock
-					sm.Insert(4, "four")
+					// This will deadlock: yield holds RLock, Set needs Lock
+					sm.Set(4, "four")
 				}
 			}
 			done <- true
@@ -1042,8 +997,8 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 	t.Run("yield callback deadlock detection - Range", func(t *testing.T) {
 		sm := Map[int, string]()
-		sm.Insert(1, "one")
-		sm.Insert(2, "two")
+		sm.Set(1, "one")
+		sm.Set(2, "two")
 
 		done := make(chan bool, 1)
 		go func() {
@@ -1067,8 +1022,8 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 	t.Run("yield callback deadlock detection - Indexes", func(t *testing.T) {
 		sm := Map[int, string]()
-		sm.Insert(1, "one")
-		sm.Insert(2, "two")
+		sm.Set(1, "one")
+		sm.Set(2, "two")
 
 		done := make(chan bool, 1)
 		go func() {
@@ -1076,7 +1031,7 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 			for range sm.Indexes() {
 				count++
 				if count == 1 {
-					sm.Insert(3, "three")
+					sm.Set(3, "three")
 				}
 			}
 			done <- true
@@ -1092,8 +1047,8 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 	t.Run("yield callback deadlock detection - RangeWithIndex", func(t *testing.T) {
 		sm := Map[int, string]()
-		sm.Insert(1, "one")
-		sm.Insert(2, "two")
+		sm.Set(1, "one")
+		sm.Set(2, "two")
 
 		done := make(chan bool, 1)
 		go func() {
@@ -1117,8 +1072,8 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 	t.Run("yield panic does not leak lock", func(t *testing.T) {
 		sm := Map[int, string]()
-		sm.Insert(1, "one")
-		sm.Insert(2, "two")
+		sm.Set(1, "one")
+		sm.Set(2, "two")
 
 		// Test Keys() panic recovery
 		func() {
@@ -1131,9 +1086,9 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 		}()
 
 		// Verify lock is not leaked - subsequent operations should work
-		_, ok := sm.GetByKey(1)
+		_, ok := sm.Get(1)
 		if !ok {
-			t.Error("GetByKey failed after panic recovery, possible lock leak")
+			t.Error("Get failed after panic recovery, possible lock leak")
 		}
 
 		// Test Range() panic recovery
@@ -1146,9 +1101,9 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 			}
 		}()
 
-		_, ok = sm.GetByKey(2)
+		_, ok = sm.Get(2)
 		if !ok {
-			t.Error("GetByKey failed after Range panic recovery, possible lock leak")
+			t.Error("Get failed after Range panic recovery, possible lock leak")
 		}
 
 		// Test Indexes() panic recovery
@@ -1161,9 +1116,9 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 			}
 		}()
 
-		_, ok = sm.GetByKey(1)
+		_, ok = sm.Get(1)
 		if !ok {
-			t.Error("GetByKey failed after Indexes panic recovery, possible lock leak")
+			t.Error("Get failed after Indexes panic recovery, possible lock leak")
 		}
 
 		// Test RangeWithIndex() panic recovery
@@ -1176,9 +1131,9 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 			}
 		}()
 
-		_, ok = sm.GetByKey(2)
+		_, ok = sm.Get(2)
 		if !ok {
-			t.Error("GetByKey failed after RangeWithIndex panic recovery, possible lock leak")
+			t.Error("Get failed after RangeWithIndex panic recovery, possible lock leak")
 		}
 
 		t.Log("All panic recovery tests passed, no lock leaks detected")
@@ -1186,8 +1141,8 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 	t.Run("iterator multiple invocations safety", func(t *testing.T) {
 		sm := Map[int, string]()
-		sm.Insert(1, "one")
-		sm.Insert(2, "two")
+		sm.Set(1, "one")
+		sm.Set(2, "two")
 
 		// Get iterator function
 		keysIter := sm.Keys()
@@ -1206,9 +1161,9 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 	t.Run("cross goroutine iterator usage", func(t *testing.T) {
 		sm := Map[int, string]()
-		sm.Insert(1, "one")
-		sm.Insert(2, "two")
-		sm.Insert(3, "three")
+		sm.Set(1, "one")
+		sm.Set(2, "two")
+		sm.Set(3, "three")
 
 		// Get iterator in main goroutine
 		keysIter := sm.Keys()
@@ -1238,7 +1193,7 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 	t.Run("concurrent multiple iterators", func(t *testing.T) {
 		sm := Map[int, string]()
 		for i := 0; i < 100; i++ {
-			sm.Insert(i, "value")
+			sm.Set(i, "value")
 		}
 
 		var wg sync.WaitGroup
@@ -1305,6 +1260,625 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 
 		if panicCount.Load() > 0 {
 			t.Errorf("Concurrent iterator usage caused %d panics", panicCount.Load())
+		}
+	})
+}
+
+func Test_sortMap_MarshalJSON(t *testing.T) {
+	type testCase struct {
+		name    string
+		s       sortMap[int, string]
+		want    []byte
+		wantErr bool
+	}
+	tests := []testCase{
+		{
+			name:    "marshal empty map",
+			s:       newTestSortMap[int, string](map[int]string{}),
+			want:    []byte("{}"),
+			wantErr: false,
+		},
+		{
+			name:    "marshal single element",
+			s:       newTestSortMap[int, string](map[int]string{1: "one"}),
+			want:    []byte(`{"1":"one"}`),
+			wantErr: false,
+		},
+		{
+			name:    "marshal multiple elements",
+			s:       newTestSortMap[int, string](map[int]string{1: "one", 2: "two", 3: "three"}),
+			want:    []byte(`{"1":"one","2":"two","3":"three"}`),
+			wantErr: false,
+		},
+		{
+			name:    "marshal with negative keys",
+			s:       newTestSortMap[int, string](map[int]string{-1: "neg", 0: "zero", 1: "pos"}),
+			want:    []byte(`{"-1":"neg","0":"zero","1":"pos"}`),
+			wantErr: false,
+		},
+		{
+			name:    "marshal with empty string values",
+			s:       newTestSortMap[int, string](map[int]string{1: "", 2: ""}),
+			want:    []byte(`{"1":"","2":""}`),
+			wantErr: false,
+		},
+		{
+			name:    "marshal with special characters in values",
+			s:       newTestSortMap[int, string](map[int]string{1: `hello "world"`, 2: "line1\nline2"}),
+			want:    []byte(`{"1":"hello \"world\"","2":"line1\nline2"}`),
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.s.MarshalJSON()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("MarshalJSON() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("MarshalJSON() got = %v, want %v", string(got), string(tt.want))
+			}
+		})
+	}
+
+	t.Run("marshal with string keys", func(t *testing.T) {
+		sm := newTestSortMap[string, int](map[string]int{"a": 1, "b": 2, "c": 3})
+		got, err := sm.MarshalJSON()
+		if err != nil {
+			t.Errorf("MarshalJSON() unexpected error = %v", err)
+			return
+		}
+		want := []byte(`{"a":1,"b":2,"c":3}`)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("MarshalJSON() got = %v, want %v", string(got), string(want))
+		}
+	})
+
+	t.Run("marshal with complex value type", func(t *testing.T) {
+		type Data struct {
+			Name  string `json:"name"`
+			Value int    `json:"value"`
+		}
+		sm := newTestSortMap[int, Data](map[int]Data{
+			1: {Name: "first", Value: 100},
+			2: {Name: "second", Value: 200},
+		})
+		got, err := sm.MarshalJSON()
+		if err != nil {
+			t.Errorf("MarshalJSON() unexpected error = %v", err)
+			return
+		}
+		want := []byte(`{"1":{"name":"first","value":100},"2":{"name":"second","value":200}}`)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("MarshalJSON() got = %v, want %v", string(got), string(want))
+		}
+	})
+
+	t.Run("marshal concurrent access safety", func(t *testing.T) {
+		sm := newTestSortMap[int, string](map[int]string{1: "one", 2: "two"})
+		var wg sync.WaitGroup
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := sm.MarshalJSON()
+				if err != nil {
+					t.Errorf("MarshalJSON() concurrent error = %v", err)
+				}
+			}()
+		}
+		wg.Wait()
+	})
+}
+
+func Test_sortMap_MarshalYAML(t *testing.T) {
+	type testCase struct {
+		name    string
+		s       sortMap[int, string]
+		want    interface{}
+		wantErr bool
+	}
+	tests := []testCase{
+		{
+			name:    "marshal empty map",
+			s:       newTestSortMap[int, string](map[int]string{}),
+			want:    map[int]string{},
+			wantErr: false,
+		},
+		{
+			name:    "marshal single element",
+			s:       newTestSortMap[int, string](map[int]string{1: "one"}),
+			want:    map[int]string{1: "one"},
+			wantErr: false,
+		},
+		{
+			name:    "marshal multiple elements",
+			s:       newTestSortMap[int, string](map[int]string{1: "one", 2: "two", 3: "three"}),
+			want:    map[int]string{1: "one", 2: "two", 3: "three"},
+			wantErr: false,
+		},
+		{
+			name:    "marshal with negative keys",
+			s:       newTestSortMap[int, string](map[int]string{-1: "neg", 0: "zero", 1: "pos"}),
+			want:    map[int]string{-1: "neg", 0: "zero", 1: "pos"},
+			wantErr: false,
+		},
+		{
+			name:    "marshal with empty string values",
+			s:       newTestSortMap[int, string](map[int]string{1: "", 2: ""}),
+			want:    map[int]string{1: "", 2: ""},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.s.MarshalYAML()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("MarshalYAML() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("MarshalYAML() got = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("marshal with string keys", func(t *testing.T) {
+		sm := newTestSortMap[string, int](map[string]int{"a": 1, "b": 2, "c": 3})
+		got, err := sm.MarshalYAML()
+		if err != nil {
+			t.Errorf("MarshalYAML() unexpected error = %v", err)
+			return
+		}
+		want := map[string]int{"a": 1, "b": 2, "c": 3}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("MarshalYAML() got = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("marshal with complex value type", func(t *testing.T) {
+		type Data struct {
+			Name  string `yaml:"name"`
+			Value int    `yaml:"value"`
+		}
+		sm := newTestSortMap[int, Data](map[int]Data{
+			1: {Name: "first", Value: 100},
+			2: {Name: "second", Value: 200},
+		})
+		got, err := sm.MarshalYAML()
+		if err != nil {
+			t.Errorf("MarshalYAML() unexpected error = %v", err)
+			return
+		}
+		want := map[int]Data{
+			1: {Name: "first", Value: 100},
+			2: {Name: "second", Value: 200},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("MarshalYAML() got = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("marshal concurrent access safety", func(t *testing.T) {
+		sm := newTestSortMap[int, string](map[int]string{1: "one", 2: "two"})
+		var wg sync.WaitGroup
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, err := sm.MarshalYAML()
+				if err != nil {
+					t.Errorf("MarshalYAML() concurrent error = %v", err)
+				}
+			}()
+		}
+		wg.Wait()
+	})
+}
+
+func Test_sortMap_UnmarshalJSON(t *testing.T) {
+	type testCase struct {
+		name    string
+		initial map[int]string
+		bytes   []byte
+		want    map[int]string
+		wantErr bool
+	}
+	tests := []testCase{
+		{
+			name:    "unmarshal empty JSON to empty map",
+			initial: map[int]string{},
+			bytes:   []byte("{}"),
+			want:    map[int]string{},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal single element",
+			initial: map[int]string{},
+			bytes:   []byte(`{"1":"one"}`),
+			want:    map[int]string{1: "one"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal multiple elements",
+			initial: map[int]string{},
+			bytes:   []byte(`{"1":"one","2":"two","3":"three"}`),
+			want:    map[int]string{1: "one", 2: "two", 3: "three"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal with negative keys",
+			initial: map[int]string{},
+			bytes:   []byte(`{"-1":"neg","0":"zero","1":"pos"}`),
+			want:    map[int]string{-1: "neg", 0: "zero", 1: "pos"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal replaces existing data",
+			initial: map[int]string{10: "old", 20: "old"},
+			bytes:   []byte(`{"1":"new"}`),
+			want:    map[int]string{1: "new"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal with empty string values",
+			initial: map[int]string{},
+			bytes:   []byte(`{"1":"","2":""}`),
+			want:    map[int]string{1: "", 2: ""},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal invalid JSON",
+			initial: map[int]string{},
+			bytes:   []byte(`{invalid}`),
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "unmarshal empty bytes",
+			initial: map[int]string{},
+			bytes:   []byte(""),
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "unmarshal non-object JSON",
+			initial: map[int]string{},
+			bytes:   []byte(`[1,2,3]`),
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "unmarshal with special characters",
+			initial: map[int]string{},
+			bytes:   []byte(`{"1":"hello \"world\"","2":"line1\nline2"}`),
+			want:    map[int]string{1: `hello "world"`, 2: "line1\nline2"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal with out-of-order indexes",
+			initial: map[int]string{},
+			bytes:   []byte(`{"5":"five","2":"two","8":"eight","1":"one","3":"three"}`),
+			want:    map[int]string{1: "one", 2: "two", 3: "three", 5: "five", 8: "eight"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal with reverse order indexes",
+			initial: map[int]string{},
+			bytes:   []byte(`{"9":"nine","8":"eight","7":"seven","6":"six","5":"five"}`),
+			want:    map[int]string{5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal with random order indexes",
+			initial: map[int]string{},
+			bytes:   []byte(`{"42":"forty-two","7":"seven","99":"ninety-nine","1":"one","15":"fifteen"}`),
+			want:    map[int]string{1: "one", 7: "seven", 15: "fifteen", 42: "forty-two", 99: "ninety-nine"},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := newTestSortMap[int, string](tt.initial)
+			err := sm.UnmarshalJSON(tt.bytes)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("UnmarshalJSON() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				return
+			}
+			if !reflect.DeepEqual(sm.dataMap, tt.want) {
+				t.Errorf("UnmarshalJSON() dataMap = %v, want %v", sm.dataMap, tt.want)
+			}
+			if len(sm.dataMap) != len(tt.want) {
+				t.Errorf("UnmarshalJSON() dataMap length = %v, want %v", len(sm.dataMap), len(tt.want))
+			}
+			for k := range tt.want {
+				if _, ok := sm.dataMap[k]; !ok {
+					t.Errorf("UnmarshalJSON() missing key %v in dataMap", k)
+				}
+			}
+		})
+	}
+
+	t.Run("unmarshal with string keys", func(t *testing.T) {
+		sm := newTestSortMap[string, int](map[string]int{})
+		err := sm.UnmarshalJSON([]byte(`{"a":1,"b":2,"c":3}`))
+		if err != nil {
+			t.Errorf("UnmarshalJSON() unexpected error = %v", err)
+			return
+		}
+		want := map[string]int{"a": 1, "b": 2, "c": 3}
+		if !reflect.DeepEqual(sm.dataMap, want) {
+			t.Errorf("UnmarshalJSON() dataMap = %v, want %v", sm.dataMap, want)
+		}
+	})
+
+	t.Run("unmarshal with complex value type", func(t *testing.T) {
+		type Data struct {
+			Name  string `json:"name"`
+			Value int    `json:"value"`
+		}
+		sm := newTestSortMap[int, Data](map[int]Data{})
+		err := sm.UnmarshalJSON([]byte(`{"1":{"name":"first","value":100},"2":{"name":"second","value":200}}`))
+		if err != nil {
+			t.Errorf("UnmarshalJSON() unexpected error = %v", err)
+			return
+		}
+		want := map[int]Data{
+			1: {Name: "first", Value: 100},
+			2: {Name: "second", Value: 200},
+		}
+		if !reflect.DeepEqual(sm.dataMap, want) {
+			t.Errorf("UnmarshalJSON() dataMap = %v, want %v", sm.dataMap, want)
+		}
+	})
+
+	t.Run("unmarshal concurrent access safety", func(t *testing.T) {
+		sm := newTestSortMap[int, string](map[int]string{})
+		var wg sync.WaitGroup
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func(n int) {
+				defer wg.Done()
+				jsonData := []byte(`{"1":"one","2":"two"}`)
+				err := sm.UnmarshalJSON(jsonData)
+				if err != nil {
+					t.Errorf("UnmarshalJSON() concurrent error = %v", err)
+				}
+			}(i)
+		}
+		wg.Wait()
+	})
+
+	t.Run("unmarshal preserves sorted index order", func(t *testing.T) {
+		sm := newTestSortMap[int, string](map[int]string{})
+		err := sm.UnmarshalJSON([]byte(`{"30":"thirty","10":"ten","20":"twenty"}`))
+		if err != nil {
+			t.Errorf("UnmarshalJSON() unexpected error = %v", err)
+			return
+		}
+		var keys []int
+		for _, k := range sm.indexList.Range() {
+			keys = append(keys, k)
+		}
+		wantKeys := []int{10, 20, 30}
+		if !reflect.DeepEqual(keys, wantKeys) {
+			t.Errorf("UnmarshalJSON() index order = %v, want %v", keys, wantKeys)
+		}
+	})
+}
+
+func Test_sortMap_UnmarshalYAML(t *testing.T) {
+	type testCase struct {
+		name    string
+		initial map[int]string
+		yamlStr string
+		want    map[int]string
+		wantErr bool
+	}
+	tests := []testCase{
+		{
+			name:    "unmarshal empty YAML to empty map",
+			initial: map[int]string{},
+			yamlStr: "{}",
+			want:    map[int]string{},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal single element",
+			initial: map[int]string{},
+			yamlStr: "1: one",
+			want:    map[int]string{1: "one"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal multiple elements",
+			initial: map[int]string{},
+			yamlStr: "1: one\n2: two\n3: three",
+			want:    map[int]string{1: "one", 2: "two", 3: "three"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal with negative keys",
+			initial: map[int]string{},
+			yamlStr: "-1: neg\n0: zero\n1: pos",
+			want:    map[int]string{-1: "neg", 0: "zero", 1: "pos"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal replaces existing data",
+			initial: map[int]string{10: "old", 20: "old"},
+			yamlStr: "1: new",
+			want:    map[int]string{1: "new"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal with empty string values",
+			initial: map[int]string{},
+			yamlStr: "1: ''\n2: ''",
+			want:    map[int]string{1: "", 2: ""},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal invalid YAML",
+			initial: map[int]string{},
+			yamlStr: "just a scalar value",
+			want:    nil,
+			wantErr: true,
+		},
+		{
+			name:    "unmarshal with special characters",
+			initial: map[int]string{},
+			yamlStr: `1: 'hello "world"'` + "\n2: |-\n  line1\n  line2",
+			want:    map[int]string{1: `hello "world"`, 2: "line1\nline2"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal with out-of-order indexes",
+			initial: map[int]string{},
+			yamlStr: "5: five\n2: two\n8: eight\n1: one\n3: three",
+			want:    map[int]string{1: "one", 2: "two", 3: "three", 5: "five", 8: "eight"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal with reverse order indexes",
+			initial: map[int]string{},
+			yamlStr: "9: nine\n8: eight\n7: seven\n6: six\n5: five",
+			want:    map[int]string{5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine"},
+			wantErr: false,
+		},
+		{
+			name:    "unmarshal with random order indexes",
+			initial: map[int]string{},
+			yamlStr: "42: forty-two\n7: seven\n99: ninety-nine\n1: one\n15: fifteen",
+			want:    map[int]string{1: "one", 7: "seven", 15: "fifteen", 42: "forty-two", 99: "ninety-nine"},
+			wantErr: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := newTestSortMap[int, string](tt.initial)
+			var node yaml.Node
+			err := yaml.Unmarshal([]byte(tt.yamlStr), &node)
+			if err != nil {
+				t.Fatalf("failed to parse YAML test data: %v", err)
+			}
+			err = sm.UnmarshalYAML(&node)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("UnmarshalYAML() error = %v, wantErr %v", err, tt.wantErr)
+				return
+			}
+			if tt.wantErr {
+				return
+			}
+			if !reflect.DeepEqual(sm.dataMap, tt.want) {
+				t.Errorf("UnmarshalYAML() dataMap = %v, want %v", sm.dataMap, tt.want)
+			}
+			if len(sm.dataMap) != len(tt.want) {
+				t.Errorf("UnmarshalYAML() dataMap length = %v, want %v", len(sm.dataMap), len(tt.want))
+			}
+			for k := range tt.want {
+				if _, ok := sm.dataMap[k]; !ok {
+					t.Errorf("UnmarshalYAML() missing key %v in dataMap", k)
+				}
+			}
+		})
+	}
+
+	t.Run("unmarshal with string keys", func(t *testing.T) {
+		sm := newTestSortMap[string, int](map[string]int{})
+		var node yaml.Node
+		err := yaml.Unmarshal([]byte("a: 1\nb: 2\nc: 3"), &node)
+		if err != nil {
+			t.Fatalf("failed to parse YAML test data: %v", err)
+		}
+		err = sm.UnmarshalYAML(&node)
+		if err != nil {
+			t.Errorf("UnmarshalYAML() unexpected error = %v", err)
+			return
+		}
+		want := map[string]int{"a": 1, "b": 2, "c": 3}
+		if !reflect.DeepEqual(sm.dataMap, want) {
+			t.Errorf("UnmarshalYAML() dataMap = %v, want %v", sm.dataMap, want)
+		}
+	})
+
+	t.Run("unmarshal with complex value type", func(t *testing.T) {
+		type Data struct {
+			Name  string `yaml:"name"`
+			Value int    `yaml:"value"`
+		}
+		sm := newTestSortMap[int, Data](map[int]Data{})
+		var node yaml.Node
+		err := yaml.Unmarshal([]byte("1:\n  name: first\n  value: 100\n2:\n  name: second\n  value: 200"), &node)
+		if err != nil {
+			t.Fatalf("failed to parse YAML test data: %v", err)
+		}
+		err = sm.UnmarshalYAML(&node)
+		if err != nil {
+			t.Errorf("UnmarshalYAML() unexpected error = %v", err)
+			return
+		}
+		want := map[int]Data{
+			1: {Name: "first", Value: 100},
+			2: {Name: "second", Value: 200},
+		}
+		if !reflect.DeepEqual(sm.dataMap, want) {
+			t.Errorf("UnmarshalYAML() dataMap = %v, want %v", sm.dataMap, want)
+		}
+	})
+
+	t.Run("unmarshal concurrent access safety", func(t *testing.T) {
+		sm := newTestSortMap[int, string](map[int]string{})
+		var node yaml.Node
+		err := yaml.Unmarshal([]byte("1: one\n2: two"), &node)
+		if err != nil {
+			t.Fatalf("failed to parse YAML test data: %v", err)
+		}
+		var wg sync.WaitGroup
+		for i := 0; i < 10; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				err := sm.UnmarshalYAML(&node)
+				if err != nil {
+					t.Errorf("UnmarshalYAML() concurrent error = %v", err)
+				}
+			}()
+		}
+		wg.Wait()
+	})
+
+	t.Run("unmarshal preserves sorted index order", func(t *testing.T) {
+		sm := newTestSortMap[int, string](map[int]string{})
+		var node yaml.Node
+		err := yaml.Unmarshal([]byte("30: thirty\n10: ten\n20: twenty"), &node)
+		if err != nil {
+			t.Fatalf("failed to parse YAML test data: %v", err)
+		}
+		err = sm.UnmarshalYAML(&node)
+		if err != nil {
+			t.Errorf("UnmarshalYAML() unexpected error = %v", err)
+			return
+		}
+		var keys []int
+		for _, k := range sm.indexList.Range() {
+			keys = append(keys, k)
+		}
+		wantKeys := []int{10, 20, 30}
+		if !reflect.DeepEqual(keys, wantKeys) {
+			t.Errorf("UnmarshalYAML() index order = %v, want %v", keys, wantKeys)
+		}
+	})
+
+	t.Run("unmarshal with nil node", func(t *testing.T) {
+		sm := newTestSortMap[int, string](map[int]string{})
+		err := sm.UnmarshalYAML(nil)
+		if err == nil {
+			t.Errorf("UnmarshalYAML() expected error for nil node, got nil")
 		}
 	})
 }
