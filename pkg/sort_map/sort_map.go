@@ -14,8 +14,12 @@ import (
 type SortMap[K cmp.Ordered, V any] interface {
 	Set(key K, value V) (oldValue V, present bool)
 	Get(key K) (value V, present bool)
+	Contains(key K) (present bool)
 	RemoveByKey(key K)
+	Clear()
+	Len() int
 	Keys() iter.Seq[K]
+	Values() iter.Seq[V]
 	Range() iter.Seq2[K, V]
 	Indexes() iter.Seq[int]
 	RangeWithIndex() iter.Seq2[int, V]
@@ -48,11 +52,31 @@ func (s *sortMap[K, V]) Get(key K) (value V, present bool) {
 	return
 }
 
+func (s *sortMap[K, V]) Contains(key K) (present bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, present = s.dataMap[key]
+	return
+}
+
 func (s *sortMap[K, V]) RemoveByKey(key K) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.dataMap, key)
 	s.indexList.Remove(key)
+}
+
+func (s *sortMap[K, V]) Clear() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dataMap = make(map[K]V)
+	s.indexList = NewMapIndexes[K]()
+}
+
+func (s *sortMap[K, V]) Len() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.indexList.Len()
 }
 
 func (s *sortMap[K, V]) Keys() iter.Seq[K] {
@@ -61,6 +85,18 @@ func (s *sortMap[K, V]) Keys() iter.Seq[K] {
 		defer s.mu.RUnlock()
 		for _, k := range s.indexList.Range() {
 			if !yield(k) {
+				return
+			}
+		}
+	}
+}
+
+func (s *sortMap[K, V]) Values() iter.Seq[V] {
+	return func(yield func(V) bool) {
+		s.mu.RLock()
+		defer s.mu.RUnlock()
+		for _, k := range s.indexList.Range() {
+			if !yield(s.dataMap[k]) {
 				return
 			}
 		}

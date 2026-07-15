@@ -7,8 +7,11 @@ import (
 
 type MapIndexes[K cmp.Ordered] interface {
 	Insert(key K)
-	Remove(key K)
 	GetKey(idx int) K
+	IndexOf(key K) int
+	Contains(key K) (present bool)
+	Remove(key K)
+	Len() int
 	Keys() iter.Seq[int]
 	Range() iter.Seq2[int, K]
 }
@@ -27,17 +30,34 @@ func (mi *mapIndexes[K]) Insert(key K) {
 	mi.insert(idx, key)
 }
 
-func (mi *mapIndexes[K]) Remove(key K) {
-	for i, k := range *mi {
-		if k == key {
-			*mi = append((*mi)[:i], (*mi)[i+1:]...)
-			return
-		}
+func (mi *mapIndexes[K]) GetKey(idx int) K {
+	if idx < 0 || idx >= len(*mi) {
+		var zero K
+		return zero
 	}
+	return (*mi)[idx]
 }
 
-func (mi *mapIndexes[K]) GetKey(idx int) K {
-	return (*mi)[idx]
+func (mi *mapIndexes[K]) IndexOf(key K) int {
+	idx, _ := bSearch[K](*mi, key)
+	return idx
+}
+
+func (mi *mapIndexes[K]) Contains(key K) (present bool) {
+	idx := mi.IndexOf(key)
+	return idx != -1
+}
+
+func (mi *mapIndexes[K]) Remove(key K) {
+	idx := mi.IndexOf(key)
+	if idx == -1 {
+		return
+	}
+	*mi = append((*mi)[:idx], (*mi)[idx+1:]...)
+}
+
+func (mi *mapIndexes[K]) Len() int {
+	return len(*mi)
 }
 
 func (mi *mapIndexes[K]) Keys() iter.Seq[int] {
@@ -62,6 +82,26 @@ func (mi *mapIndexes[K]) Range() iter.Seq2[int, K] {
 
 func NewMapIndexes[K cmp.Ordered]() MapIndexes[K] {
 	return &mapIndexes[K]{}
+}
+
+func bSearch[K cmp.Ordered](ints []K, val K) (int, K) {
+	return bSearchInternally[K](ints, 0, len(ints)-1, val)
+}
+
+func bSearchInternally[K cmp.Ordered](ints []K, low int, high int, val K) (int, K) {
+	var zero K
+	if low > high {
+		return -1, zero
+	}
+
+	mid := low + ((high - low) >> 1)
+	if ints[mid] == val {
+		return mid, ints[mid]
+	} else if ints[mid] > val {
+		return bSearchInternally[K](ints, low, mid-1, val)
+	} else {
+		return bSearchInternally[K](ints, mid+1, high, val)
+	}
 }
 
 func bSearchFirstGT[K cmp.Ordered](ints []K, val K) (int, K) {
@@ -117,5 +157,8 @@ func bSearchFirstFreeIndexInternally(indexes *mapIndexes[int], low, high int) in
 }
 
 func lastFreeIndex(indexes *mapIndexes[int]) int {
-	return indexes.GetKey(len(*indexes)-1) + 1
+	if indexes.Len() == 0 {
+		return 0
+	}
+	return indexes.GetKey(indexes.Len()-1) + 1
 }
