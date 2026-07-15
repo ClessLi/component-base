@@ -350,3 +350,129 @@ func Test_mapList_UnmarshalYAML(t *testing.T) {
 		}
 	})
 }
+
+func Test_mapList_Remove(t *testing.T) {
+	type args struct {
+		index int
+	}
+	type testCase[V any] struct {
+		name         string
+		m            *mapList[V]
+		args         args
+		wantLenAfter int
+	}
+	tests := []testCase[string]{
+		{
+			name:         "remove from empty list",
+			m:            List[string]().(*mapList[string]),
+			args:         args{index: 0},
+			wantLenAfter: 0,
+		},
+		{
+			name:         "remove negative index - no-op",
+			m:            func() *mapList[string] { ml := List[string]().(*mapList[string]); ml.Append("a"); return ml }(),
+			args:         args{index: -1},
+			wantLenAfter: 1,
+		},
+		{
+			name: "remove existing index",
+			m: func() *mapList[string] {
+				ml := List[string]().(*mapList[string])
+				ml.Append("a")
+				ml.Append("b")
+				ml.Append("c")
+				return ml
+			}(),
+			args:         args{index: 1},
+			wantLenAfter: 2,
+		},
+		{
+			name: "remove non-existing index",
+			m: func() *mapList[string] {
+				ml := List[string]().(*mapList[string])
+				ml.Append("a")
+				ml.Append("b")
+				return ml
+			}(),
+			args:         args{index: 10},
+			wantLenAfter: 2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.m.Remove(tt.args.index)
+			if got := tt.m.Len(); got != tt.wantLenAfter {
+				t.Errorf("Len after Remove() = %v, want %v", got, tt.wantLenAfter)
+			}
+		})
+	}
+}
+
+func Test_mapList_Contains(t *testing.T) {
+	type args struct {
+		index int
+	}
+	type testCase struct {
+		name        string
+		m           MapList[string]
+		args        args
+		wantPresent bool
+	}
+	tests := []testCase{
+		{
+			name:        "empty list - not present",
+			m:           List[string](),
+			args:        args{index: 0},
+			wantPresent: false,
+		},
+		{
+			name:        "negative index - not present",
+			m:           func() MapList[string] { ml := List[string](); ml.Append("a"); return ml }(),
+			args:        args{index: -1},
+			wantPresent: false,
+		},
+		{
+			name:        "index out of bounds - not present",
+			m:           func() MapList[string] { ml := List[string](); ml.Append("a"); ml.Append("b"); return ml }(),
+			args:        args{index: 10},
+			wantPresent: false,
+		},
+		{
+			name: "valid index - present",
+			m: func() MapList[string] {
+				ml := List[string]()
+				ml.Append("a")
+				ml.Append("b")
+				ml.Append("c")
+				return ml
+			}(),
+			args:        args{index: 1},
+			wantPresent: true,
+		},
+		{
+			name:        "first index - present",
+			m:           func() MapList[string] { ml := List[string](); ml.Append("a"); ml.Append("b"); return ml }(),
+			args:        args{index: 0},
+			wantPresent: true,
+		},
+		{
+			name: "last index - present",
+			m: func() MapList[string] {
+				ml := List[string]()
+				ml.Append("a")
+				ml.Append("b")
+				ml.Append("c")
+				return ml
+			}(),
+			args:        args{index: 2},
+			wantPresent: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if gotPresent := tt.m.Contains(tt.args.index); gotPresent != tt.wantPresent {
+				t.Errorf("Contains() = %v, want %v", gotPresent, tt.wantPresent)
+			}
+		})
+	}
+}

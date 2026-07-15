@@ -1882,3 +1882,172 @@ func Test_sortMap_UnmarshalYAML(t *testing.T) {
 		}
 	})
 }
+
+func Test_sortMap_Contains(t *testing.T) {
+	type args[K cmp.Ordered] struct {
+		key K
+	}
+	type testCase[K cmp.Ordered, V any] struct {
+		name        string
+		s           sortMap[K, V]
+		args        args[K]
+		wantPresent bool
+	}
+	tests := []testCase[int, string]{
+		{
+			name:        "empty map - not present",
+			s:           newTestSortMap[int, string](map[int]string{}),
+			args:        args[int]{key: 5},
+			wantPresent: false,
+		},
+		{
+			name:        "single element - present",
+			s:           newTestSortMap[int, string](map[int]string{5: "five"}),
+			args:        args[int]{key: 5},
+			wantPresent: true,
+		},
+		{
+			name:        "single element - not present",
+			s:           newTestSortMap[int, string](map[int]string{5: "five"}),
+			args:        args[int]{key: 3},
+			wantPresent: false,
+		},
+		{
+			name:        "multiple elements - present at beginning",
+			s:           newTestSortMap[int, string](map[int]string{1: "one", 3: "three", 5: "five", 7: "seven", 9: "nine"}),
+			args:        args[int]{key: 1},
+			wantPresent: true,
+		},
+		{
+			name:        "multiple elements - present at end",
+			s:           newTestSortMap[int, string](map[int]string{1: "one", 3: "three", 5: "five", 7: "seven", 9: "nine"}),
+			args:        args[int]{key: 9},
+			wantPresent: true,
+		},
+		{
+			name:        "multiple elements - present in middle",
+			s:           newTestSortMap[int, string](map[int]string{1: "one", 3: "three", 5: "five", 7: "seven", 9: "nine"}),
+			args:        args[int]{key: 5},
+			wantPresent: true,
+		},
+		{
+			name:        "multiple elements - not present less than all",
+			s:           newTestSortMap[int, string](map[int]string{1: "one", 3: "three", 5: "five", 7: "seven", 9: "nine"}),
+			args:        args[int]{key: 0},
+			wantPresent: false,
+		},
+		{
+			name:        "multiple elements - not present greater than all",
+			s:           newTestSortMap[int, string](map[int]string{1: "one", 3: "three", 5: "five", 7: "seven", 9: "nine"}),
+			args:        args[int]{key: 10},
+			wantPresent: false,
+		},
+		{
+			name:        "multiple elements - not present between elements",
+			s:           newTestSortMap[int, string](map[int]string{1: "one", 3: "three", 5: "five", 7: "seven", 9: "nine"}),
+			args:        args[int]{key: 4},
+			wantPresent: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if gotPresent := tt.s.Contains(tt.args.key); gotPresent != tt.wantPresent {
+				t.Errorf("Contains() = %v, want %v", gotPresent, tt.wantPresent)
+			}
+		})
+	}
+}
+
+func Test_sortMap_Clear(t *testing.T) {
+	type testCase[K cmp.Ordered, V any] struct {
+		name string
+		s    sortMap[K, V]
+	}
+	tests := []testCase[int, string]{
+		{
+			name: "clear empty map",
+			s:    newTestSortMap[int, string](map[int]string{}),
+		},
+		{
+			name: "clear single element map",
+			s:    newTestSortMap[int, string](map[int]string{1: "one"}),
+		},
+		{
+			name: "clear multiple elements map",
+			s:    newTestSortMap[int, string](map[int]string{1: "one", 3: "three", 5: "five", 7: "seven", 9: "nine"}),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.s.Clear()
+		})
+	}
+}
+
+func Test_sortMap_Len(t *testing.T) {
+	type testCase[K cmp.Ordered, V any] struct {
+		name string
+		s    sortMap[K, V]
+		want int
+	}
+	tests := []testCase[int, string]{
+		{
+			name: "empty map",
+			s:    newTestSortMap[int, string](map[int]string{}),
+			want: 0,
+		},
+		{
+			name: "single element map",
+			s:    newTestSortMap[int, string](map[int]string{1: "one"}),
+			want: 1,
+		},
+		{
+			name: "multiple elements map",
+			s:    newTestSortMap[int, string](map[int]string{1: "one", 3: "three", 5: "five", 7: "seven", 9: "nine"}),
+			want: 5,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.s.Len(); got != tt.want {
+				t.Errorf("Len() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_sortMap_Values(t *testing.T) {
+	type testCase[K cmp.Ordered, V any] struct {
+		name string
+		s    sortMap[K, V]
+		want []V
+	}
+	tests := []testCase[int, string]{
+		{
+			name: "empty map",
+			s:    newTestSortMap[int, string](map[int]string{}),
+			want: []string{},
+		},
+		{
+			name: "single element map",
+			s:    newTestSortMap[int, string](map[int]string{1: "one"}),
+			want: []string{"one"},
+		},
+		{
+			name: "multiple elements map",
+			s:    newTestSortMap[int, string](map[int]string{1: "one", 3: "three", 5: "five"}),
+			want: []string{"one", "three", "five"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := make([]string, 0)
+			for v := range tt.s.Values() {
+				got = append(got, v)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Values() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
