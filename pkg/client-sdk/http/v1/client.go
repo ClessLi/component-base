@@ -5,9 +5,9 @@ import (
 	"context"
 	"net/http"
 
+	"github.com/ClessLi/component-base/pkg/errors"
 	"github.com/go-kit/kit/endpoint"
 	http_transport "github.com/go-kit/kit/transport/http"
-	"github.com/marmotedu/errors"
 )
 
 // Client interface provides a standard endpoint with request/response conversion capabilities

@@ -3,7 +3,7 @@ package utils
 import (
 	"strconv"
 
-	"github.com/marmotedu/errors"
+	"github.com/ClessLi/component-base/pkg/errors"
 )
 
 func ParseInt64List(strs []string) ([]int64, error) {

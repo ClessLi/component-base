@@ -25,7 +25,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/marmotedu/errors"
+	"github.com/ClessLi/component-base/pkg/errors"
 )
 
 // ErrActionNotSet is returned when attempting to execute without configuring an action

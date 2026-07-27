@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"iter"
 
-	"github.com/marmotedu/errors"
+	"github.com/ClessLi/component-base/pkg/errors"
 	"gopkg.in/yaml.v3"
 )
 

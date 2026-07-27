@@ -3,9 +3,9 @@ package v1
 import (
 	"context"
 
+	"github.com/ClessLi/component-base/pkg/errors"
 	"github.com/ClessLi/component-base/pkg/utils"
 	"github.com/go-kit/kit/endpoint"
-	"github.com/marmotedu/errors"
 )
 
 type Endpoint[REQ any, RESP any] func(ctx context.Context, request HTTPRequest[REQ]) (response RESP, err error)

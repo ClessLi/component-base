@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"reflect"
 
-	"github.com/marmotedu/component-base/pkg/core"
-	"github.com/marmotedu/errors"
+	"github.com/ClessLi/component-base/pkg/core"
+	"github.com/ClessLi/component-base/pkg/errors"
 )
 
 func DecodeResponse[RESP any](ctx context.Context, response *http.Response) (interface{}, error) {
@@ -30,7 +30,7 @@ func DecodeResponse[RESP any](ctx context.Context, response *http.Response) (int
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to unmarshal error response, status: %s, response raw: %s", response.Status, string(bodydata))
 		}
-		return nil, errors.WithCode(errResp.Code, errResp.Message)
+		return nil, errors.WithCode(errResp.Namespace, errResp.Code, errResp.Message)
 	}
 
 	// Handle JSON null value for NilBody type (server returns "null" for empty response)
