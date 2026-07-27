@@ -2,9 +2,10 @@ package prevent_cycles
 
 import (
 	"fmt"
-	"github.com/dominikbraun/graph"
-	"github.com/marmotedu/errors"
 	"strings"
+
+	"github.com/ClessLi/component-base/pkg/errors"
+	"github.com/dominikbraun/graph"
 )
 
 type Preventer interface {
