@@ -146,12 +146,12 @@ func (s *GenericGRPCServer[Factory]) Setup() {
 }
 
 func (s *GenericGRPCServer[Factory]) InstallMiddlewares() {
-	// necessary middlewares
+	// necessary middlewareNames
 	// s.Use(limits.RequestSizeLimiter(10))
 
-	// install custom middlewares
+	// install custom middlewareNames
 	// TODO:
-	// for _, m := range s.middlewares {
+	// for _, m := range s.middlewareNames {
 	// mw, ok := middleware.Middlewares[m]
 	// if !ok {
 	//	log.Warnf("can not find middleware: %s", m)
