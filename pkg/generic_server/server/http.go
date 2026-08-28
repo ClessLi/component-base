@@ -135,7 +135,7 @@ type preparedGenericAPIServer[Svc any, Store any] struct {
 func (s *GenericAPIServer[Svc, Store]) initRouter() {
 	if s.Router == nil {
 		logV1.Debug("Initializing gin router")
-		s.Router = gin.New()
+		s.Router = gin.Default()
 	}
 }
 
