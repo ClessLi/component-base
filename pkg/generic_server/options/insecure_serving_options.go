@@ -40,7 +40,7 @@ func (i *InsecureServingOptions[Svc, Store]) ApplyToAPIConfig(c *server.APIServe
 }
 
 // ApplyToGRPCConfig applies the insecure serving options to the gRPC server config.
-func (i *InsecureServingOptions[Svc, Store]) ApplyToGRPCConfig(c *server.GRPCServerConfig[Svc]) error {
+func (i *InsecureServingOptions[Svc, Store]) ApplyToGRPCConfig(c *server.GRPCServerConfig[Svc, Store]) error {
 	c.InsecureServing = i.buildInsecureServingInfo()
 
 	return nil

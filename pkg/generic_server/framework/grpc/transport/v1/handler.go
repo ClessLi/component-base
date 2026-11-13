@@ -1,6 +1,3 @@
-// Package v1 provides generic gRPC transport layer utilities.
-// It defines Decoder, Encoder, and Handler interfaces with generic type constraints
-// for building type-safe gRPC handlers.
 package v1
 
 import (

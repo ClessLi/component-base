@@ -62,7 +62,7 @@ func (s *SecureServingOptions[Svc, Store]) ApplyToAPIConfig(c *server.APIServerC
 }
 
 // ApplyToGRPCConfig applies the secure serving options to the gRPC server config.
-func (s *SecureServingOptions[Svc, Store]) ApplyToGRPCConfig(c *server.GRPCServerConfig[Svc]) error {
+func (s *SecureServingOptions[Svc, Store]) ApplyToGRPCConfig(c *server.GRPCServerConfig[Svc, Store]) error {
 	c.SecureServing = s.buildSecureServingInfo()
 
 	return nil

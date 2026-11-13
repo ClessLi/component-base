@@ -1,4 +1,3 @@
-// Package v1 provides generic gRPC transport layer utilities.
 package v1
 
 import "context"

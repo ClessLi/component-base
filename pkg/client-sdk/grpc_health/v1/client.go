@@ -38,7 +38,7 @@ func NewClientFromConsul(consulHost string, consulPort uint16, opts ...grpc.Dial
 }
 
 func NewClient(svrAddr string, opts ...grpc.DialOption) (*Client, error) {
-	conn, err := grpc.Dial(svrAddr, opts...)
+	conn, err := grpc.NewClient(svrAddr, opts...)
 	if err != nil {
 		return nil, err
 	}

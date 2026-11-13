@@ -34,6 +34,7 @@ func WriteResponse(c *gin.Context, err error, data interface{}) {
 		logV1.Errorf("%#+v", err)
 		coder := errors.ParseCoder(err)
 		c.JSON(coder.HTTPStatus(), ErrResponse{
+			Namespace: coder.Namespace(),
 			Code:      coder.Code(),
 			Message:   coder.String(),
 			Reference: coder.Reference(),
