@@ -94,7 +94,7 @@ func (c *GRPCServerConfig[Svc, Store]) Complete() CompletedGRPCServerConfig[Svc,
 }
 
 // GenericGRPCServer contains state for a generic gRPC server.
-type GenericGRPCServer[Svc any, Store any] struct {
+type GenericGRPCServer[Txp, Ep, Svc, Store any] struct {
 	// middlewareNames is the list of middleware names to install.
 	middlewareNames []string
 
@@ -153,7 +153,7 @@ type GenericGRPCServer[Svc any, Store any] struct {
 	serviceRegisters map[string]svcregisterv1.ServiceRegister
 
 	// bizHooks provides lifecycle hooks for installation.
-	bizHooks GRPCServerBizHooks[Svc, Store]
+	bizHooks GRPCServerBizHooks[Txp, Ep, Svc, Store]
 
 	// svcPtr holds the initialized service factory instance.
 	svcPtr *Svc
@@ -182,12 +182,12 @@ type PreparedGenericGRPCServer interface {
 	Close() error
 }
 
-type preparedGenericGRPCServer[Svc any, Store any] struct {
-	*GenericGRPCServer[Svc, Store]
+type preparedGenericGRPCServer[Txp, Ep, Svc, Store any] struct {
+	*GenericGRPCServer[Txp, Ep, Svc, Store]
 }
 
 // installRAClient initializes the RA registration client and instance suffix ID.
-func (s *GenericGRPCServer[Svc, Store]) installRAClient() error {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) installRAClient() error {
 	if s.RAInfo == nil || (s.RAInfo.Host == "" && s.RAInfo.Port == 0) {
 		return nil
 	}
@@ -208,7 +208,7 @@ func (s *GenericGRPCServer[Svc, Store]) installRAClient() error {
 }
 
 // initMiddlewares installs custom middlewares in configured order.
-func (s *GenericGRPCServer[Svc, Store]) initMiddlewares() error {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) initMiddlewares() error {
 	if s.svcPtr == nil {
 		return errors.New("service pointer not initialized, initBiz must be called first")
 	}
@@ -235,8 +235,8 @@ func (s *GenericGRPCServer[Svc, Store]) initMiddlewares() error {
 	return nil
 }
 
-// initBiz initializes store, service, middlewares, and service registers.
-func (s *GenericGRPCServer[Svc, Store]) initBiz() error {
+// initBiz initializes store, service, middlewares, endpoints, transport, and service registers.
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) initBiz() error {
 	// Defer cleanup to handle partial initialization failures.
 	// Only triggers if installed remains false (i.e., an error occurred).
 	installed := false
@@ -282,13 +282,31 @@ func (s *GenericGRPCServer[Svc, Store]) initBiz() error {
 		logV1.Debug("gRPC profiling service not yet implemented")
 	}
 
-	// Build gRPC service registers (counterpart of HTTP InitController)
-	logV1.Debug("Initializing service registers")
-	registers, err := s.bizHooks.ServiceRegisters(*s.svcPtr)
+	// Initialize endpoint layer
+	logV1.Debug("Initializing endpoint layer")
+	eps, err := s.bizHooks.InitEndpoints(*s.svcPtr)
 	if err != nil {
-		return errors.Wrap(err, "failed to build service registers")
+		return errors.Wrap(err, "failed to initialize endpoints")
 	}
-	s.serviceRegisters = registers
+	logV1.Debug("Endpoint layer initialized")
+
+	// Initialize transport layer (chunkSize injected from the server config)
+	logV1.Debug("Initializing transport layer")
+	txp, err := s.bizHooks.InitTransport(eps, s.ChunkSize)
+	if err != nil {
+		return errors.Wrap(err, "failed to initialize transport")
+	}
+	logV1.Debug("Transport layer initialized")
+
+	// Build gRPC service registers (counterpart of HTTP InitController).
+	// Biz hooks only declare what to register; the framework owns the registration
+	// control flow (health status transitions, pb register invocation).
+	logV1.Debug("Initializing service registers")
+	registrations, err := s.bizHooks.ServiceRegistrations(txp)
+	if err != nil {
+		return errors.Wrap(err, "failed to build service registrations")
+	}
+	s.serviceRegisters = svcregisterv1.GenerateServiceRegisters(registrations...)
 	logV1.Debug("Service registers initialized")
 
 	installed = true
@@ -297,7 +315,7 @@ func (s *GenericGRPCServer[Svc, Store]) initBiz() error {
 
 // initLifecycle initializes and starts the graceful shutdown manager.
 // It registers Close() as the unified shutdown callback and starts listening for system signals.
-func (s *GenericGRPCServer[Svc, Store]) initLifecycle() error {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) initLifecycle() error {
 	s.gs.AddShutdownCallback(shutdown.ShutdownFunc(func(shutdownManager string) error {
 		logV1.Infof("Shutdown triggered by manager [%s], initiating graceful shutdown", shutdownManager)
 		if err := s.Close(); err != nil {
@@ -319,7 +337,7 @@ func (s *GenericGRPCServer[Svc, Store]) initLifecycle() error {
 
 // cleanupBiz cleans up all resources initialized during initBiz.
 // Safe to call multiple times (idempotent via Shutdown implementation).
-func (s *GenericGRPCServer[Svc, Store]) cleanupBiz() error {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) cleanupBiz() error {
 	if s.bizHooks != nil {
 		if err := s.bizHooks.Shutdown(); err != nil {
 			logV1.Errorf("Failed to cleanup business resources: %+v", err)
@@ -332,7 +350,7 @@ func (s *GenericGRPCServer[Svc, Store]) cleanupBiz() error {
 // cleanupRunState cleans up resources initialized during run.
 // It cancels the internal context, deregisters services, stops servers,
 // and shuts down business resources. Called in defer on failure paths.
-func (s *GenericGRPCServer[Svc, Store]) cleanupRunState() {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) cleanupRunState() {
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -342,7 +360,9 @@ func (s *GenericGRPCServer[Svc, Store]) cleanupRunState() {
 }
 
 // NewGRPCServer returns a new GenericGRPCServer instance from the given config.
-func (c CompletedGRPCServerConfig[Svc, Store]) NewGRPCServer(ctx context.Context, bizHooks GRPCServerBizHooks[Svc, Store]) *GenericGRPCServer[Svc, Store] {
+// It is a package-level function because the endpoint/transport type parameters
+// are runtime assembly concerns that the config and options layers do not carry.
+func NewGRPCServer[Txp any, Ep any, Svc any, Store any](ctx context.Context, c CompletedGRPCServerConfig[Svc, Store], bizHooks GRPCServerBizHooks[Txp, Ep, Svc, Store]) *GenericGRPCServer[Txp, Ep, Svc, Store] {
 	if bizHooks == nil {
 		logV1.Panicf("bizHooks must not be nil")
 	}
@@ -354,7 +374,7 @@ func (c CompletedGRPCServerConfig[Svc, Store]) NewGRPCServer(ctx context.Context
 	gs := shutdown.New()
 	gs.AddShutdownManager(posixsignal.NewPosixSignalManager())
 
-	s := &GenericGRPCServer[Svc, Store]{
+	s := &GenericGRPCServer[Txp, Ep, Svc, Store]{
 		SecureServingInfo:   c.SecureServing,
 		InsecureServingInfo: c.InsecureServing,
 		RAInfo:              c.RA,
@@ -376,7 +396,7 @@ func (c CompletedGRPCServerConfig[Svc, Store]) NewGRPCServer(ctx context.Context
 }
 
 // PrepareRun prepares the server for running by installing services and registering shutdown callbacks.
-func (s *GenericGRPCServer[Svc, Store]) PrepareRun() PreparedGenericGRPCServer {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) PrepareRun() PreparedGenericGRPCServer {
 	logV1.Info("Preparing generic gRPC server")
 
 	if s.SecureServingInfo == nil && s.InsecureServingInfo == nil {
@@ -399,11 +419,11 @@ func (s *GenericGRPCServer[Svc, Store]) PrepareRun() PreparedGenericGRPCServer {
 	}
 
 	logV1.Info("Generic gRPC server prepared")
-	return &preparedGenericGRPCServer[Svc, Store]{s}
+	return &preparedGenericGRPCServer[Txp, Ep, Svc, Store]{s}
 }
 
 // Run starts the gRPC server. The shutdown manager is already started in PrepareRun.
-func (p *preparedGenericGRPCServer[Svc, Store]) Run() error {
+func (p *preparedGenericGRPCServer[Txp, Ep, Svc, Store]) Run() error {
 	logV1.Debug("Starting prepared generic gRPC server")
 
 	// Reject if shutdown signal was received before Run() was called.
@@ -434,7 +454,7 @@ func (p *preparedGenericGRPCServer[Svc, Store]) Run() error {
 
 // run spawns the gRPC servers. It only returns when the port cannot be listened on initially,
 // the health check fails, or the servers exit.
-func (s *GenericGRPCServer[Svc, Store]) run() error {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) run() error {
 	var eg errgroup.Group
 
 	// Defer cleanup to handle startup failure or server exit with error.
@@ -506,7 +526,7 @@ func (s *GenericGRPCServer[Svc, Store]) run() error {
 
 // buildServers creates fresh grpc.Server and health.Server instances for each serving.
 // TLS credentials are reloaded per run cycle to support certificate rotation.
-func (s *GenericGRPCServer[Svc, Store]) buildServers() error {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) buildServers() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -536,7 +556,7 @@ func (s *GenericGRPCServer[Svc, Store]) buildServers() error {
 
 // registerServices registers the health server and business services to each serving,
 // and registers service instances to the RA.
-func (s *GenericGRPCServer[Svc, Store]) registerServices() {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) registerServices() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -575,7 +595,7 @@ func (s *GenericGRPCServer[Svc, Store]) registerServices() {
 }
 
 // registerToRA registers a service instance to the RA. Must be called with mu held.
-func (s *GenericGRPCServer[Svc, Store]) registerToRA(svcname, bindHost string, bindPort uint16) {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) registerToRA(svcname, bindHost string, bindPort uint16) {
 	if s.registryClient == nil {
 		return
 	}
@@ -589,7 +609,7 @@ func (s *GenericGRPCServer[Svc, Store]) registerToRA(svcname, bindHost string, b
 
 // deregisterServices deregisters all service instances from the RA.
 // Safe to call multiple times.
-func (s *GenericGRPCServer[Svc, Store]) deregisterServices() {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) deregisterServices() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -609,7 +629,7 @@ func (s *GenericGRPCServer[Svc, Store]) deregisterServices() {
 
 // startGRPCServer starts an insecure or secure gRPC server with proper lifecycle management.
 // The listener is created synchronously so that port conflicts are reported immediately.
-func (s *GenericGRPCServer[Svc, Store]) startGRPCServer(eg *errgroup.Group, isSecure bool) error {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) startGRPCServer(eg *errgroup.Group, isSecure bool) error {
 	var (
 		serverType string
 		address    string
@@ -654,7 +674,7 @@ func (s *GenericGRPCServer[Svc, Store]) startGRPCServer(eg *errgroup.Group, isSe
 
 // stopGRPCServers stops all servers gracefully with a forced stop fallback.
 // Safe to call when servers are nil or already stopped.
-func (s *GenericGRPCServer[Svc, Store]) stopGRPCServers() {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) stopGRPCServers() {
 	s.mu.Lock()
 	insecureServer, secureServer := s.insecureServer, s.secureServer
 	insecureHealth, secureHealth := s.insecureSvrHealthz, s.secureSvrHealthz
@@ -673,7 +693,7 @@ func (s *GenericGRPCServer[Svc, Store]) stopGRPCServers() {
 // stopGRPCServer adds a server shutdown task to the error group.
 // GracefulStop is bounded by ShutdownTimeout; on timeout the server is force-stopped
 // to prevent hanging on long-lived streaming RPCs.
-func (s *GenericGRPCServer[Svc, Store]) stopGRPCServer(eg *errgroup.Group, server *grpc.Server, healthSvr *health.Server, serverType string) {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) stopGRPCServer(eg *errgroup.Group, server *grpc.Server, healthSvr *health.Server, serverType string) {
 	eg.Go(func() error {
 		logV1.Debugf("Shutting down %s gRPC server", serverType)
 
@@ -703,7 +723,7 @@ func (s *GenericGRPCServer[Svc, Store]) stopGRPCServer(eg *errgroup.Group, serve
 
 // Close gracefully shuts down the gRPC server.
 // Safe to call multiple times; concurrent calls are idempotent.
-func (s *GenericGRPCServer[Svc, Store]) Close() error {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) Close() error {
 	// Atomic state transition: Running -> Closing
 	if !s.state.CompareAndSwap(ServerStateRunning, ServerStateClosing) {
 		currentState := s.state.Load()
@@ -740,14 +760,14 @@ func (s *GenericGRPCServer[Svc, Store]) Close() error {
 }
 
 // transitionToStopped atomically transitions the server state from Running to Stopped.
-func (s *GenericGRPCServer[Svc, Store]) transitionToStopped(reason string) {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) transitionToStopped(reason string) {
 	if s.state.CompareAndSwap(ServerStateRunning, ServerStateStopped) {
 		logV1.Debugf("Server state transition: Running -> Stopped (reason: %s)", reason)
 	}
 }
 
 // close performs the actual shutdown logic.
-func (s *GenericGRPCServer[Svc, Store]) close() error {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) close() error {
 	logV1.Info("Shutting down gRPC server")
 
 	// Deregister from RA first so that no new traffic is routed to this instance.
@@ -775,7 +795,7 @@ func (s *GenericGRPCServer[Svc, Store]) close() error {
 }
 
 // setupPing creates a health check client for the given serving.
-func (s *GenericGRPCServer[Svc, Store]) setupPing(isSecure bool) (*healthzclientv1.Client, error) {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) setupPing(isSecure bool) (*healthzclientv1.Client, error) {
 	var (
 		serverType string
 		address    string
@@ -813,7 +833,7 @@ func (s *GenericGRPCServer[Svc, Store]) setupPing(isSecure bool) (*healthzclient
 
 // ping verifies all registered services on all servings are SERVING.
 // It retries with exponential backoff until the context is done.
-func (s *GenericGRPCServer[Svc, Store]) ping(ctx context.Context) error {
+func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) ping(ctx context.Context) error {
 	healthzClients := make(map[string]*healthzclientv1.Client)
 	if s.InsecureServingInfo != nil {
 		client, err := s.setupPing(false)

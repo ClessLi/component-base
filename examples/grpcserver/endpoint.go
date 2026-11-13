@@ -21,6 +21,9 @@ type demoEndpoints struct {
 	svc DemoService
 }
 
+// Compile-time check that demoEndpoints satisfies the endpoint-set contract.
+var _ DemoEndpoints = (*demoEndpoints)(nil)
+
 // NewDemoEndpoints creates the endpoint set for the demo service.
 func NewDemoEndpoints(svc DemoService) DemoEndpoints {
 	return &demoEndpoints{svc: svc}

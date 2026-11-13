@@ -36,7 +36,10 @@ type APIServerBizHooks[Svc any, Store any] interface {
 }
 
 // GRPCServerBizHooks defines the business lifecycle hooks for the gRPC server.
-type GRPCServerBizHooks[Svc any, Store any] interface {
+// Ep is the endpoint-layer aggregate and Txp is the transport-layer factory; both
+// are initialized under the generic server's control flow and injected into the
+// downstream hooks.
+type GRPCServerBizHooks[Txp, Ep, Svc, Store any] interface {
 	// InitStore initializes the storage layer.
 	InitStore() (Store, error)
 
@@ -46,10 +49,19 @@ type GRPCServerBizHooks[Svc any, Store any] interface {
 	// RegisteredMiddlewares returns the middleware registry for the service type.
 	RegisteredMiddlewares() (grpcmwv1.Middlewares[Svc], error)
 
-	// ServiceRegisters builds the gRPC service register map from the service factory.
-	// It is the gRPC counterpart of APIServerBizHooks.InitController: the generic server
-	// registers the returned map to all configured servings and to the RA.
-	ServiceRegisters(svc Svc) (map[string]svcregisterv1.ServiceRegister, error)
+	// InitEndpoints initializes the endpoint layer from the middleware-wrapped service factory.
+	InitEndpoints(svc Svc) (Ep, error)
+
+	// InitTransport initializes the transport layer from the endpoint set. chunkSize
+	// is injected from the generic server config (GRPCServing.ChunkSize).
+	InitTransport(eps Ep, chunkSize int) (Txp, error)
+
+	// ServiceRegistrations declares the business services to register from the
+	// initialized transport factory. It is the gRPC counterpart of
+	// APIServerBizHooks.InitController: the framework service_register package turns
+	// the declarations into register funcs (owning the registration control flow),
+	// and the generic server registers them to all configured servings and to the RA.
+	ServiceRegistrations(txp Txp) ([]svcregisterv1.ServiceRegistration, error)
 
 	// Startup is called after all layers are initialized and before the server starts listening.
 	// Use this hook to start business resources such as connection pools, background workers, or schedulers.

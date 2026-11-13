@@ -366,9 +366,10 @@ const _ = grpc.SupportPackageIsVersion6
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://godoc.org/google.golang.org/grpc#ClientConn.NewStream.
 type DemoClient interface {
-	// Echo 一元 RPC：回显请求消息，演示 传输层->端点层->中间件层->服务层->存储层 链路。
+	// Echo unary RPC: echoes the request message, demonstrating the
+	// transport -> endpoint -> middleware -> service -> store pipeline.
 	Echo(ctx context.Context, in *EchoRequest, opts ...grpc.CallOption) (*EchoResponse, error)
-	// Download 服务器流式 RPC：按 ChunkSize 分块下发数据，演示 transport.StreamSendMsg。
+	// Download server-streaming RPC: sends data in ChunkSize chunks, demonstrating transport.StreamSendMsg.
 	Download(ctx context.Context, in *DownloadRequest, opts ...grpc.CallOption) (Demo_DownloadClient, error)
 }
 
@@ -423,9 +424,10 @@ func (x *demoDownloadClient) Recv() (*Chunk, error) {
 
 // DemoServer is the server API for Demo service.
 type DemoServer interface {
-	// Echo 一元 RPC：回显请求消息，演示 传输层->端点层->中间件层->服务层->存储层 链路。
+	// Echo unary RPC: echoes the request message, demonstrating the
+	// transport -> endpoint -> middleware -> service -> store pipeline.
 	Echo(context.Context, *EchoRequest) (*EchoResponse, error)
-	// Download 服务器流式 RPC：按 ChunkSize 分块下发数据，演示 transport.StreamSendMsg。
+	// Download server-streaming RPC: sends data in ChunkSize chunks, demonstrating transport.StreamSendMsg.
 	Download(*DownloadRequest, Demo_DownloadServer) error
 }
 

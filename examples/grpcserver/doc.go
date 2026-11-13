@@ -2,38 +2,72 @@
 // Use of this source code is governed by a MIT style
 // license that can be found in the LICENSE file.
 
-// Package grpcserver 演示如何基于 component-base 的通用 gRPC 服务端
-// （pkg/generic_server/server）与 gRPC 五层框架（pkg/generic_server/framework/grpc）
-// 搭建一个自包含的 gRPC 服务端，结构参考 bifrost 项目的服务端。
+// Package grpcserver demonstrates how to build a self-contained gRPC server on
+// top of component-base's generic gRPC server (pkg/generic_server/server) and
+// the five-layer gRPC framework (pkg/generic_server/framework/grpc). The
+// structure mirrors the bifrost project's server.
 //
-// 五层架构（以 go-kit 为基础）：
+// Five-layer architecture (based on go-kit):
 //
-//	传输层  transport.go / handler.go / decoder.go / encoder.go  —— pb 服务实现、Handler、编解码
-//	端点层  endpoint.go                                          —— Endpoint[DomainReq, DomainResp]
-//	中间件层 middleware.go                                       —— Middlewares[ServiceFactory]
-//	服务层  service.go                                           —— ServiceFactory / DemoService
-//	存储层  store.go                                             —— StoreFactory / DemoStore（内存实现）
+//	Transport layer  transport.go / handler.go / decoder.go / encoder.go  -- pb service impls, handlers, codecs
+//	Endpoint layer   endpoint.go                                          -- Endpoint[DomainReq, DomainResp]
+//	Middleware layer middleware.go                                        -- Middlewares[ServiceFactory]
+//	Service layer    service.go                                           -- ServiceFactory / DemoService
+//	Store layer      store.go                                             -- StoreFactory / DemoStore (in-memory)
 //
-// 装配与生命周期：
+// Assembly and lifecycle:
 //
 //	Options -> CreateConfigFromOptions -> GRPCServerConfig
 //	        -> NewServer(ctx, cfg) -> GenericGRPCServer
 //	        -> PrepareRun() -> Run()
 //
-// bizHooks 实现 GRPCServerBizHooks[ServiceFactory, StoreFactory]，调用顺序为
-// InitStore -> InitService -> RegisteredMiddlewares -> ServiceRegisters -> Startup -> Shutdown。
-// 其中 ServiceRegisters 经 endpoint -> handler -> transport Factory -> register generator
-// 产出 map[string]ServiceRegister，由通用服务端注册到 grpc.Server（及 RA，若配置）。
+// bizHooks implements GRPCServerBizHooks[Factory, DemoEndpoints, ServiceFactory, StoreFactory];
+// each method only delegates to its own layer constructor. The call order is
+// InitStore -> InitService -> RegisteredMiddlewares -> InitEndpoints ->
+// InitTransport -> ServiceRegistrations -> Startup -> Shutdown, with all five
+// layers initialized under the generic server's control. ServiceRegistrations
+// receives the initialized transport layer and delegates to register.go's
+// NewServiceRegistrations, which declares service name + implementation + pb
+// register func. The registration control flow (health status transitions,
+// mounting implementations) is owned by the framework's
+// svcregisterv1.GenerateServiceRegisters; the generic server then registers the
+// services to grpc.Server (and to the RA, if configured).
 //
-// Demo 服务含两种 RPC 形态：
-//   - Echo：一元 RPC，演示 解码 -> 端点 -> 编码 链路。
-//   - Download：服务器流式 RPC，由 transport.StreamHandler 封装“计算+分块下发”，pb-service 仅调 ServeGRPCStream。
+// The Demo service covers two RPC shapes:
+//   - Echo: unary RPC, demonstrating the decode -> endpoint -> encode pipeline.
+//   - Download: server-streaming RPC; transport.StreamHandler encapsulates
+//     "compute + chunked send", so the pb-service method only calls ServeGRPCStream.
 //
-// ChunkSize 经 NewBizHooks(chunkSize) 注入（ServiceRegisters hook 仅接收服务工厂），
-// 来源于 server.GRPCServing.ChunkSize。component-base 已移除独立传输层 Options，
-// chunkSize 在构造期注入 StreamHandler（NewDemoHandlers），底层经 ServeStream 调用 StreamSendMsg。
+// ChunkSize is injected by the generic server via the InitTransport hook,
+// sourced from server.GRPCServing.ChunkSize. component-base removed the
+// standalone transport Options; chunkSize is injected into the StreamHandler at
+// construction (NewDemoHandlers), which calls StreamSendMsg via ServeStream.
 //
-// 运行：
+// # Reusing this example in a business project
+//
+//  1. Copy this directory and rename the package; replace the .proto files under
+//     api/protobuf-spec with your business protocol and regenerate the pb code
+//     via cmd/genpb's go:generate.
+//  2. Replace the business implementations layer by layer (keep each layer's
+//     Factory/interface contracts and file layout):
+//     store.go      replace the in-memory impl with real storage (MySQL/Redis, etc.);
+//     service.go    replace with business service logic;
+//     middleware.go add/remove named middlewares as needed (keys match Options.Middlewares);
+//     endpoint.go / handler.go / decoder.go / encoder.go / transport.go
+//     one endpoint/handler/codec/pb-service set per pb service;
+//     register.go   declare NewServiceRegistration per service (name + impl + pb register func).
+//  3. Keep unchanged: the hooks.go delegation pattern (each Init only calls its
+//     own layer constructor, no cross-layer assembly) and server.go's
+//     Options -> Config -> NewServer assembly chain. The registration control
+//     flow (health status transitions, mounting order) is owned by the
+//     framework's svcregisterv1.GenerateServiceRegisters; business code must
+//     never set health status by hand.
+//  4. Naming conventions: each layer entry point is XxxFactory; registration
+//     names follow "<RA prefix>.<proto package>.<Service>" and double as the
+//     gRPC health-check keys; streaming RPCs always send chunks via
+//     transport.StreamHandler.
+//
+// # Running the server
 //
 //	func main() {
 //	    if err := grpcserver.Run(grpcserver.NewOptions()); err != nil {
@@ -41,11 +75,13 @@
 //	    }
 //	}
 //
-// 默认监听 127.0.0.1:8081（insecure）。pb 客户端调用示例见 grpcserver_test.go。
+// It listens on 127.0.0.1:8081 (insecure) by default. See grpcserver_test.go
+// for pb client call examples.
 //
-// 测试：
+// # Testing
 //
 //	go test ./examples/grpcserver/...
 //
-// pb 代码由 cmd/genpb/gen_grpcserver_protobuf.go 的 go:generate 命令生成（参考 bifrost）。
+// The pb code is generated by the go:generate command in
+// cmd/genpb/gen_grpcserver_protobuf.go (mirroring bifrost).
 package grpcserver
