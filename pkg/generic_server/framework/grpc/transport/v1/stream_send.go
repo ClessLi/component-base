@@ -41,3 +41,9 @@ func StreamSendMsg[ProtoMsg any](stream grpc.ServerStream, data []byte, chunksiz
 
 	return nil
 }
+
+// TODO(channel-transport): add a channel-based send primitive (e.g. StreamSendChan)
+// that drains chunks from a Go channel (<-chan []byte) and forwards each to the gRPC
+// server stream via the assembler. Unlike StreamSendMsg's synchronous byte-slice
+// chunking, the channel variant decouples chunk production from sending, supporting
+// concurrent producers and backpressure. To be implemented later.

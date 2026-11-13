@@ -20,6 +20,12 @@ type StreamHandler[ProtoReq, ProtoMsg any] interface {
 	ServeGRPCStream(ctx context.Context, request ProtoReq, stream grpc.ServerStream) error
 }
 
+// TODO(channel-transport): add a channel-based streaming handler variant (e.g.
+// ChanStreamHandler with a ServeStreamChan counterpart) whose compute stage produces
+// protobuf messages into a Go channel and whose transport drains that channel to the
+// stream. This complements StreamHandler's "compute full response + chunked send"
+// pipeline with incremental, producer-driven streaming. To be implemented later.
+
 // streamHandler wires the unary compute pipeline (Handler) with the chunked-send
 // concern (chunksize/extractor/assembler).
 type streamHandler[ProtoReq, DomainReq, DomainResp, ProtoResp, ProtoMsg any] struct {
