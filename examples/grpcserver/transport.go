@@ -12,6 +12,7 @@ import (
 
 // Factory is the transport-layer factory producing pb service implementations
 // that can be registered onto a grpc.Server. It mirrors bifrost's transport/v1.Factory.
+// Adaptation point: add one method per pb service when the project grows.
 type Factory interface {
 	Demo() pbv1.DemoServer
 }
@@ -20,10 +21,13 @@ type transport struct {
 	handlers DemoHandlers
 }
 
-// New creates the transport factory. The streaming chunkSize is already injected
-// into the StreamHandler at construction (component-base removed the standalone
-// transport Options struct).
-func New(handlers DemoHandlers) Factory {
+// Compile-time check that transport satisfies the factory contract.
+var _ Factory = (*transport)(nil)
+
+// NewFactory creates the transport factory. The streaming chunkSize is already
+// injected into the StreamHandler at construction (component-base removed the
+// standalone transport Options struct).
+func NewFactory(handlers DemoHandlers) Factory {
 	return &transport{handlers: handlers}
 }
 
@@ -37,6 +41,9 @@ type demoServer struct {
 	pbv1.UnimplementedDemoServer
 	handlers DemoHandlers
 }
+
+// Compile-time check that demoServer satisfies the pb service contract.
+var _ pbv1.DemoServer = (*demoServer)(nil)
 
 // Echo is a unary RPC: delegate to the handler for decode -> endpoint -> encode.
 func (s *demoServer) Echo(ctx context.Context, req *pbv1.EchoRequest) (*pbv1.EchoResponse, error) {

@@ -12,7 +12,9 @@ import (
 	methodlog "github.com/ClessLi/component-base/pkg/methodlog/v1"
 )
 
-// GetMiddlewares returns the middleware registry for the service factory.
+// GetMiddlewares returns the named middleware registry for the service factory.
+// The generic server installs the middlewares listed in GRPCServerConfig.Middlewares
+// by looking them up here, wrapping the service factory in order.
 func GetMiddlewares() grpcmwv1.Middlewares[ServiceFactory] {
 	return defaultMiddlewares
 }
@@ -39,6 +41,12 @@ func (l *loggingServiceFactory) Demo() DemoService {
 type loggingDemoService struct {
 	next DemoService
 }
+
+// Compile-time checks that the logging wrappers preserve the layer contracts.
+var (
+	_ ServiceFactory = (*loggingServiceFactory)(nil)
+	_ DemoService    = (*loggingDemoService)(nil)
+)
 
 func (l *loggingDemoService) Echo(ctx context.Context, message string) (string, error) {
 	var resp string

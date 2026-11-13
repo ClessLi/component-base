@@ -28,6 +28,9 @@ type demoHandlers struct {
 	downloadHandler transportv1.StreamHandler[*pbv1.DownloadRequest, *pbv1.Chunk]
 }
 
+// Compile-time check that demoHandlers satisfies the handler-set contract.
+var _ DemoHandlers = (*demoHandlers)(nil)
+
 // NewDemoHandlers creates the handler set from the endpoint layer. chunkSize is
 // injected from the generic server config for the streaming handler.
 func NewDemoHandlers(eps DemoEndpoints, chunkSize int) DemoHandlers {

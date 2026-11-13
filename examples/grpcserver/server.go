@@ -68,7 +68,7 @@ func CreateConfigFromOptions(opts *Options) (*genericserver.GRPCServerConfig[Ser
 		return nil, err
 	}
 
-	// 示例关闭 metrics/profiling，避免 prometheus 全局注册副作用。
+	// The example disables metrics/profiling to avoid prometheus global registration side effects.
 	cfg.EnableMetrics = false
 	cfg.EnableProfiling = false
 
@@ -76,9 +76,9 @@ func CreateConfigFromOptions(opts *Options) (*genericserver.GRPCServerConfig[Ser
 }
 
 // NewServer builds a generic gRPC server from the config and business hooks.
-func NewServer(ctx context.Context, cfg *genericserver.GRPCServerConfig[ServiceFactory, StoreFactory]) *genericserver.GenericGRPCServer[ServiceFactory, StoreFactory] {
+func NewServer(ctx context.Context, cfg *genericserver.GRPCServerConfig[ServiceFactory, StoreFactory]) *genericserver.GenericGRPCServer[Factory, DemoEndpoints, ServiceFactory, StoreFactory] {
 	completed := cfg.Complete()
-	return completed.NewGRPCServer(ctx, NewBizHooks(completed.GRPCServing.ChunkSize))
+	return genericserver.NewGRPCServer[Factory, DemoEndpoints, ServiceFactory, StoreFactory](ctx, completed, NewBizHooks())
 }
 
 // Run wires options -> config -> server and runs until shutdown.
