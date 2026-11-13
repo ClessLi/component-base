@@ -27,6 +27,9 @@ type serviceFactory struct {
 	store StoreFactory
 }
 
+// Compile-time check that serviceFactory satisfies the factory contract.
+var _ ServiceFactory = (*serviceFactory)(nil)
+
 func (f *serviceFactory) Demo() DemoService {
 	return NewDemoService(f.store.Demo())
 }
@@ -34,6 +37,9 @@ func (f *serviceFactory) Demo() DemoService {
 type demoService struct {
 	store DemoStore
 }
+
+// Compile-time check that demoService satisfies the service contract.
+var _ DemoService = (*demoService)(nil)
 
 // NewDemoService creates a DemoService backed by the given store.
 func NewDemoService(store DemoStore) DemoService {

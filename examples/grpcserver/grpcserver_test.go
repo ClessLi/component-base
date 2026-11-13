@@ -19,8 +19,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// TestGRPCServer 启动通用 gRPC 服务端（真实端口），用生成的 pb 客户端验证
-// 一元 Echo 与服务器流式 Download（分块）两条链路。
+// TestGRPCServer boots the generic gRPC server on a real port and verifies the
+// unary Echo and server-streaming Download (chunked) paths with the generated
+// pb client.
 func TestGRPCServer(t *testing.T) {
 	port := freePort(t)
 
@@ -42,7 +43,7 @@ func TestGRPCServer(t *testing.T) {
 	go func() { runErr <- prepared.Run() }()
 	defer func() {
 		_ = prepared.Close()
-		// 等待 Run 退出，避免 goroutine 泄漏。
+		// Wait for Run to exit to avoid goroutine leaks.
 		select {
 		case <-runErr:
 		case <-time.After(5 * time.Second):
@@ -63,42 +64,59 @@ func TestGRPCServer(t *testing.T) {
 
 	client := pbv1.NewDemoClient(conn)
 
-	// 一元 Echo：验证 解码 -> 端点 -> 服务 -> 编码 链路。
-	echoResp, err := client.Echo(ctx, &pbv1.EchoRequest{Message: "hello"})
-	if err != nil {
-		t.Fatalf("Echo failed: %+v", err)
-	}
-	if got := echoResp.GetMessage(); got != "echo: hello" {
-		t.Fatalf("Echo response = %q, want %q", got, "echo: hello")
-	}
-
-	// 服务器流式 Download：拼接所有分块应等于预置数据，且分块数 > 1（证明 StreamSendMsg 分块）。
-	stream, err := client.Download(ctx, &pbv1.DownloadRequest{Key: sampleKey})
-	if err != nil {
-		t.Fatalf("Download failed: %+v", err)
-	}
-	var buf bytes.Buffer
-	chunks := 0
-	for {
-		chunk, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
+	// Unary Echo: verifies the decode -> endpoint -> service -> encode pipeline.
+	t.Run("Echo", func(t *testing.T) {
+		echoResp, err := client.Echo(ctx, &pbv1.EchoRequest{Message: "hello"})
 		if err != nil {
-			t.Fatalf("Download recv failed: %+v", err)
+			t.Fatalf("Echo failed: %+v", err)
 		}
-		buf.Write(chunk.GetData())
-		chunks++
-	}
-	if !bytes.Equal(buf.Bytes(), sampleData) {
-		t.Fatalf("Download payload mismatch: got %d bytes, want %d bytes", buf.Len(), len(sampleData))
-	}
-	if chunks <= 1 {
-		t.Fatalf("Download should produce multiple chunks, got %d", chunks)
-	}
+		if got := echoResp.GetMessage(); got != "echo: hello" {
+			t.Fatalf("Echo response = %q, want %q", got, "echo: hello")
+		}
+	})
+
+	// Server-streaming Download: reassembled chunks must equal the preset data,
+	// with more than one chunk (proving StreamSendMsg chunking).
+	t.Run("Download", func(t *testing.T) {
+		stream, err := client.Download(ctx, &pbv1.DownloadRequest{Key: sampleKey})
+		if err != nil {
+			t.Fatalf("Download failed: %+v", err)
+		}
+		var buf bytes.Buffer
+		chunks := 0
+		for {
+			chunk, err := stream.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				t.Fatalf("Download recv failed: %+v", err)
+			}
+			buf.Write(chunk.GetData())
+			chunks++
+		}
+		if !bytes.Equal(buf.Bytes(), sampleData) {
+			t.Fatalf("Download payload mismatch: got %d bytes, want %d bytes", buf.Len(), len(sampleData))
+		}
+		if chunks <= 1 {
+			t.Fatalf("Download should produce multiple chunks, got %d", chunks)
+		}
+	})
+
+	// Error propagation: an unknown-key error must travel through the
+	// store -> service -> endpoint -> transport layers back to the client.
+	t.Run("DownloadUnknownKey", func(t *testing.T) {
+		stream, err := client.Download(ctx, &pbv1.DownloadRequest{Key: "no-such-key"})
+		if err != nil {
+			t.Fatalf("Download failed: %+v", err)
+		}
+		if _, err := stream.Recv(); err == nil {
+			t.Fatal("expected error for unknown key, got nil")
+		}
+	})
 }
 
-// freePort 获取一个空闲端口（监听 :0 后释放），供测试绑定。
+// freePort grabs a free port (listen on :0 then release) for the test to bind.
 func freePort(t *testing.T) int {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")

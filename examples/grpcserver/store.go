@@ -11,8 +11,9 @@ import (
 	"github.com/ClessLi/component-base/pkg/errors"
 )
 
-// sampleKey/sampleData 是预置的示例数据，供 Download 流式 RPC 演示分块下发。
-// 数据长度刻意超过默认 ChunkSize（1024 字节），以便产生多个流式分块。
+// sampleKey/sampleData are the preset demo data for the Download streaming RPC.
+// The payload is intentionally larger than the default ChunkSize (1024 bytes)
+// so the stream produces multiple chunks.
 const sampleKey = "greeting"
 
 var sampleData = []byte(strings.Repeat("component-base generic gRPC server streaming demo. ", 64))
@@ -40,6 +41,9 @@ type storeFactory struct {
 	demo DemoStore
 }
 
+// Compile-time check that storeFactory satisfies the factory contract.
+var _ StoreFactory = (*storeFactory)(nil)
+
 func (f *storeFactory) Demo() DemoStore {
 	return f.demo
 }
@@ -49,6 +53,9 @@ type memoryStore struct {
 	mu   sync.RWMutex
 	data map[string][]byte
 }
+
+// Compile-time check that memoryStore satisfies the store contract.
+var _ DemoStore = (*memoryStore)(nil)
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{data: make(map[string][]byte)}
