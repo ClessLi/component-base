@@ -6,7 +6,7 @@ package v1
 import (
 	"net/http"
 
-	epv1 "github.com/ClessLi/component-base/pkg/generic_server/framework/grpc/endpoint/v1"
+	epv1 "github.com/ClessLi/component-base/pkg/generic_server/framework/http/endpoint/v1"
 	"github.com/gin-gonic/gin"
 )
 

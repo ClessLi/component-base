@@ -2,17 +2,19 @@ package server
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	healthzclientv1 "github.com/ClessLi/component-base/pkg/client-sdk/grpc_health/v1"
+	"github.com/ClessLi/component-base/pkg/errors"
 	svcregisterv1 "github.com/ClessLi/component-base/pkg/generic_server/framework/grpc/service_register/v1"
-
 	logV1 "github.com/ClessLi/component-base/pkg/log/v1"
 	"github.com/ClessLi/skirnir/pkg/discover"
+	"github.com/marmotedu/iam/pkg/shutdown"
+	"github.com/marmotedu/iam/pkg/shutdown/shutdownmanagers/posixsignal"
 
 	uuid "github.com/satori/go.uuid"
 	"golang.org/x/sync/errgroup"
@@ -45,7 +47,7 @@ func NewGRPCServingInfo() *GRPCServingInfo {
 
 // GRPCServerConfig is a structure used to configure a GenericGRPCServer.
 // Its members are sorted roughly in order of importance for composers.
-type GRPCServerConfig[Factory any] struct {
+type GRPCServerConfig[Svc any, Store any] struct {
 	Namespace       string
 	SecureServing   *SecureServingInfo
 	InsecureServing *InsecureServingInfo
@@ -55,39 +57,54 @@ type GRPCServerConfig[Factory any] struct {
 	Healthz         bool
 	EnableProfiling bool
 	EnableMetrics   bool
+	PingTimeout     time.Duration
+	ShutdownTimeout time.Duration
 }
 
 // NewGRPCServerConfig returns a GRPCServerConfig struct with the default values.
-func NewGRPCServerConfig[Factory any]() *GRPCServerConfig[Factory] {
-	return &GRPCServerConfig[Factory]{
+func NewGRPCServerConfig[Svc any, Store any]() *GRPCServerConfig[Svc, Store] {
+	return &GRPCServerConfig[Svc, Store]{
 		Healthz:         true,
 		Middlewares:     []string{},
 		EnableProfiling: true,
 		EnableMetrics:   true,
+		PingTimeout:     30 * time.Second,
+		ShutdownTimeout: 30 * time.Second,
 	}
 }
 
 // CompletedGRPCServerConfig is the completed configuration for GenericGRPCServer.
-type CompletedGRPCServerConfig[Factory any] struct {
-	*GRPCServerConfig[Factory]
+type CompletedGRPCServerConfig[Svc any, Store any] struct {
+	*GRPCServerConfig[Svc, Store]
 }
 
 // Complete fills in any fields not set that are required to have valid data and can be derived
 // from other fields. If you're going to `ApplyOptions`, do that first. It's mutating the receiver.
-func (c *GRPCServerConfig[Factory]) Complete() CompletedGRPCServerConfig[Factory] {
-	return CompletedGRPCServerConfig[Factory]{GRPCServerConfig: c}
+func (c *GRPCServerConfig[Svc, Store]) Complete() CompletedGRPCServerConfig[Svc, Store] {
+	if c.GRPCServing == nil {
+		c.GRPCServing = NewGRPCServingInfo()
+	}
+	if c.PingTimeout == 0 {
+		c.PingTimeout = 30 * time.Second
+	}
+	if c.ShutdownTimeout == 0 {
+		c.ShutdownTimeout = 30 * time.Second
+	}
+	return CompletedGRPCServerConfig[Svc, Store]{GRPCServerConfig: c}
 }
 
 // GenericGRPCServer contains state for a generic gRPC server.
-type GenericGRPCServer[Factory any] struct {
-	middlewares []string
+type GenericGRPCServer[Svc any, Store any] struct {
+	// middlewareNames is the list of middleware names to install.
+	middlewareNames []string
+
 	// SecureServingInfo holds configuration of the TLS server.
 	SecureServingInfo *SecureServingInfo
 
 	// InsecureServingInfo holds configuration of the insecure grpc server.
 	InsecureServingInfo *InsecureServingInfo
 
-	// RAInfo holds configuration of th Registration Authority server.
+	// RAInfo holds configuration of the Registration Authority server.
 	RAInfo *RAInfo
 
 	// ChunkSize set chunk size of the grpc server.
@@ -96,42 +113,412 @@ type GenericGRPCServer[Factory any] struct {
 	// ReceiveTimeout is the timeout used for the grpc server receiving data.
 	ReceiveTimeout time.Duration
 
-	// ShutdownTimeout is the timeout used for server shutdown. This specifies the timeout before server
-	// gracefully shutdown returns.
+	// PingTimeout is the timeout duration for health check pings.
+	PingTimeout time.Duration
+
+	// ShutdownTimeout is the timeout used for server shutdown.
 	ShutdownTimeout time.Duration
 
-	// workContext is the context used for communicating with various service running tasks.
-	workContext context.Context
+	// healthz indicates whether the health check service is enabled.
+	healthz bool
 
-	healthz         bool
-	enableMetrics   bool
+	// enableMetrics indicates whether the metrics interceptor is enabled.
+	enableMetrics bool
+
+	// enableProfiling indicates whether the profiling service is enabled.
 	enableProfiling bool
 
-	instanceSuffixID string
-	registryClient   discover.RegistryClient
+	// mu protects server references and registration state from concurrent access.
+	mu sync.Mutex
 
+	// insecureServer is the insecure grpc server.
+	insecureServer *grpc.Server
+
+	// secureServer is the secure grpc server.
+	secureServer *grpc.Server
+
+	// insecureSvrHealthz and secureSvrHealthz are the health servers for each serving.
 	insecureSvrHealthz, secureSvrHealthz *health.Server
-	insecureServer, secureServer         *grpc.Server
-	registeredService                    []string
+
+	// instanceSuffixID is the unique suffix for RA service instance IDs.
+	instanceSuffixID string
+
+	// registryClient is the RA registration client.
+	registryClient discover.RegistryClient
+
+	// registeredService is the list of service names registered to RA.
+	registeredService []string
+
+	// serviceRegisters holds the gRPC service register map built by biz hooks.
+	serviceRegisters map[string]svcregisterv1.ServiceRegister
+
+	// bizHooks provides lifecycle hooks for installation.
+	bizHooks GRPCServerBizHooks[Svc, Store]
+
+	// svcPtr holds the initialized service factory instance.
+	svcPtr *Svc
+
+	// gs manages graceful shutdown.
+	gs *shutdown.GracefulShutdown
+
+	// parentCtx is the parent context passed from the caller.
+	parentCtx context.Context
+	// ctx is the internal context used for the server lifecycle.
+	ctx context.Context
+	// cancel is the function to cancel the internal server context.
+	cancel context.CancelFunc
+
+	// state tracks the server lifecycle state using atomic operations.
+	state atomic.Int32
+
+	// shutdownBeforeRun indicates if Close() was called before Run().
+	// When true, Run() should be rejected to prevent starting after shutdown signal.
+	shutdownBeforeRun atomic.Bool
 }
 
-func (s *GenericGRPCServer[Factory]) Setup() {
-	if s.SecureServingInfo == nil && s.InsecureServingInfo == nil {
-		logV1.Fatal("Failed to setup generic gRPC server, no serving information is available for setup.")
+// PreparedGenericGRPCServer is the interface for a prepared server ready to run.
+type PreparedGenericGRPCServer interface {
+	Run() error
+	Close() error
+}
 
-		return
+type preparedGenericGRPCServer[Svc any, Store any] struct {
+	*GenericGRPCServer[Svc, Store]
+}
+
+// installRAClient initializes the RA registration client and instance suffix ID.
+func (s *GenericGRPCServer[Svc, Store]) installRAClient() error {
+	if s.RAInfo == nil || (s.RAInfo.Host == "" && s.RAInfo.Port == 0) {
+		return nil
 	}
+
+	client, err := discover.NewKitConsulRegistryClient(s.RAInfo.Host, uint16(s.RAInfo.Port))
+	if err != nil {
+		return errors.Wrap(err, "failed to create RA registry client")
+	}
+
+	id, err := uuid.NewV4()
+	if err != nil {
+		return errors.Wrap(err, "failed to generate instance suffix ID")
+	}
+
+	s.registryClient = client
+	s.instanceSuffixID = id.String()
+	return nil
+}
+
+// initMiddlewares installs custom middlewares in configured order.
+func (s *GenericGRPCServer[Svc, Store]) initMiddlewares() error {
+	if s.svcPtr == nil {
+		return errors.New("service pointer not initialized, initBiz must be called first")
+	}
+
+	// TODO: Install built-in gRPC interceptors (recovery, request size limiter, etc.).
+
+	// Get custom middleware registry
+	mws, err := s.bizHooks.RegisteredMiddlewares()
+	if err != nil {
+		return errors.Wrap(err, "failed to get middleware registry")
+	}
+
+	// Install custom middlewares in configured order
+	for _, name := range s.middlewareNames {
+		mw, exists := mws[name]
+		if !exists {
+			return errors.Errorf("middleware not found: %s", name)
+		}
+
+		*s.svcPtr = mw(*s.svcPtr)
+		logV1.Infof("Middleware installed: %s", name)
+	}
+
+	return nil
+}
+
+// initBiz initializes store, service, middlewares, and service registers.
+func (s *GenericGRPCServer[Svc, Store]) initBiz() error {
+	// Defer cleanup to handle partial initialization failures.
+	// Only triggers if installed remains false (i.e., an error occurred).
+	installed := false
+	defer func() {
+		if !installed {
+			s.cleanupBiz()
+		}
+	}()
+
+	// Initialize storage layer
+	logV1.Debug("Initializing store layer")
+	store, err := s.bizHooks.InitStore()
+	if err != nil {
+		return errors.Wrap(err, "failed to initialize store")
+	}
+	logV1.Debug("Store layer initialized")
+
+	// Initialize service layer
+	logV1.Debug("Initializing service layer")
+	svc, err := s.bizHooks.InitService(store)
+	if err != nil {
+		return errors.Wrap(err, "failed to initialize service")
+	}
+	s.svcPtr = &svc
+	logV1.Debug("Service layer initialized")
+
+	// Install middlewares
+	logV1.Debug("Installing middlewares")
+	if err := s.initMiddlewares(); err != nil {
+		return errors.Wrap(err, "failed to install middlewares")
+	}
+	logV1.Debug("Middlewares installed")
+
+	// Install metrics interceptors
+	if s.enableMetrics {
+		// TODO: Add gRPC metrics interceptors (e.g. grpc-prometheus).
+		logV1.Debug("gRPC metrics interceptors not yet implemented")
+	}
+
+	// Install profiling service
+	if s.enableProfiling {
+		// TODO: Add gRPC profiling service (e.g. channelz, pprof over gRPC).
+		logV1.Debug("gRPC profiling service not yet implemented")
+	}
+
+	// Build gRPC service registers (counterpart of HTTP InitController)
+	logV1.Debug("Initializing service registers")
+	registers, err := s.bizHooks.ServiceRegisters(*s.svcPtr)
+	if err != nil {
+		return errors.Wrap(err, "failed to build service registers")
+	}
+	s.serviceRegisters = registers
+	logV1.Debug("Service registers initialized")
+
+	installed = true
+	return nil
+}
+
+// initLifecycle initializes and starts the graceful shutdown manager.
+// It registers Close() as the unified shutdown callback and starts listening for system signals.
+func (s *GenericGRPCServer[Svc, Store]) initLifecycle() error {
+	s.gs.AddShutdownCallback(shutdown.ShutdownFunc(func(shutdownManager string) error {
+		logV1.Infof("Shutdown triggered by manager [%s], initiating graceful shutdown", shutdownManager)
+		if err := s.Close(); err != nil {
+			logV1.Errorf("Failed to close generic gRPC server: %+v", err)
+			return err
+		}
+		return nil
+	}))
+	logV1.Debug("Shutdown callback registered")
+
+	if err := s.gs.Start(); err != nil {
+		logV1.Errorf("Failed to start shutdown manager: %+v", err)
+		return err
+	}
+	logV1.Debug("Shutdown manager started")
+
+	return nil
+}
+
+// cleanupBiz cleans up all resources initialized during initBiz.
+// Safe to call multiple times (idempotent via Shutdown implementation).
+func (s *GenericGRPCServer[Svc, Store]) cleanupBiz() error {
+	if s.bizHooks != nil {
+		if err := s.bizHooks.Shutdown(); err != nil {
+			logV1.Errorf("Failed to cleanup business resources: %+v", err)
+			return err
+		}
+	}
+	return nil
+}
+
+// cleanupRunState cleans up resources initialized during run.
+// It cancels the internal context, deregisters services, stops servers,
+// and shuts down business resources. Called in defer on failure paths.
+func (s *GenericGRPCServer[Svc, Store]) cleanupRunState() {
+	if s.cancel != nil {
+		s.cancel()
+	}
+	s.deregisterServices()
+	s.stopGRPCServers()
+	_ = s.cleanupBiz()
+}
+
+// NewGRPCServer returns a new GenericGRPCServer instance from the given config.
+func (c CompletedGRPCServerConfig[Svc, Store]) NewGRPCServer(ctx context.Context, bizHooks GRPCServerBizHooks[Svc, Store]) *GenericGRPCServer[Svc, Store] {
+	if bizHooks == nil {
+		logV1.Panicf("bizHooks must not be nil")
+	}
+	if ctx == nil {
+		logV1.Panicf("ctx must not be nil")
+	}
+
+	// Initialize graceful shutdown manager
+	gs := shutdown.New()
+	gs.AddShutdownManager(posixsignal.NewPosixSignalManager())
+
+	s := &GenericGRPCServer[Svc, Store]{
+		SecureServingInfo:   c.SecureServing,
+		InsecureServingInfo: c.InsecureServing,
+		RAInfo:              c.RA,
+		ChunkSize:           c.GRPCServing.ChunkSize,
+		ReceiveTimeout:      time.Duration(c.GRPCServing.RecvTimeoutM) * time.Minute,
+		PingTimeout:         c.PingTimeout,
+		ShutdownTimeout:     c.ShutdownTimeout,
+		healthz:             c.Healthz,
+		enableMetrics:       c.EnableMetrics,
+		enableProfiling:     c.EnableProfiling,
+		middlewareNames:     c.Middlewares,
+		bizHooks:            bizHooks,
+		gs:                  gs,
+		parentCtx:           ctx,
+	}
+	s.state.Store(ServerStateCreated)
+
+	return s
+}
+
+// PrepareRun prepares the server for running by installing services and registering shutdown callbacks.
+func (s *GenericGRPCServer[Svc, Store]) PrepareRun() PreparedGenericGRPCServer {
+	logV1.Info("Preparing generic gRPC server")
+
+	if s.SecureServingInfo == nil && s.InsecureServingInfo == nil {
+		logV1.Panicf("no serving information is available for setup")
+	}
+
+	// Install RA client
+	if err := s.installRAClient(); err != nil {
+		logV1.Panicf("Failed to install RA client: %+v", err)
+	}
+
+	// Install all services
+	if err := s.initBiz(); err != nil {
+		logV1.Panicf("Failed to install services: %+v", err)
+	}
+
+	// Initialize and start shutdown manager
+	if err := s.initLifecycle(); err != nil {
+		logV1.Panicf("Failed to initialize lifecycle: %+v", err)
+	}
+
+	logV1.Info("Generic gRPC server prepared")
+	return &preparedGenericGRPCServer[Svc, Store]{s}
+}
+
+// Run starts the gRPC server. The shutdown manager is already started in PrepareRun.
+func (p *preparedGenericGRPCServer[Svc, Store]) Run() error {
+	logV1.Debug("Starting prepared generic gRPC server")
+
+	// Reject if shutdown signal was received before Run() was called.
+	// This prevents starting the server after resources have been cleaned up.
+	if p.shutdownBeforeRun.Load() {
+		return errors.New("server shutdown was requested before Run(), cannot start")
+	}
+
+	// Check state: created or stopped to running
+	currentState := p.state.Load()
+	if currentState != ServerStateCreated && currentState != ServerStateStopped {
+		return errors.Errorf("server cannot run in current state: %d", currentState)
+	}
+
+	// Check if parent context is still valid before creating a new child context
+	if p.parentCtx.Err() != nil {
+		return errors.Wrapf(p.parentCtx.Err(), "parent context is no longer valid")
+	}
+
+	// Rebuild context for each run cycle to ensure a fresh, uncancelled context
+	p.ctx, p.cancel = context.WithCancel(p.parentCtx)
+
+	logV1.Debugf("Server state transition: %d -> Running", currentState)
+	p.state.Store(ServerStateRunning)
+
+	return p.GenericGRPCServer.run()
+}
+
+// run spawns the gRPC servers. It only returns when the port cannot be listened on initially,
+// the health check fails, or the servers exit.
+func (s *GenericGRPCServer[Svc, Store]) run() error {
+	var eg errgroup.Group
+
+	// Defer cleanup to handle startup failure or server exit with error.
+	// Only triggers if cleanupNeeded remains true (i.e., an error occurred).
+	cleanupNeeded := true
+	defer func() {
+		if cleanupNeeded {
+			s.cleanupRunState()
+		}
+	}()
+
+	// Call startup hook
+	if err := s.bizHooks.Startup(); err != nil {
+		s.transitionToStopped("startup failure")
+		return errors.Wrap(err, "failed to startup business resources")
+	}
+
+	// Build fresh servers for this run cycle (grpc.Server cannot be reused after stop)
+	if err := s.buildServers(); err != nil {
+		s.transitionToStopped("build servers failure")
+		return errors.Wrap(err, "failed to build gRPC servers")
+	}
+
+	// Register health and business services, then register to RA
+	s.registerServices()
+
+	// Start insecure server if configured
+	if s.InsecureServingInfo != nil {
+		if err := s.startGRPCServer(&eg, false); err != nil {
+			s.transitionToStopped("insecure server startup failure")
+			return err
+		}
+	} else {
+		logV1.Info("Pass start insecure gRPC server")
+	}
+
+	// Start secure server if configured
 	if s.SecureServingInfo != nil {
-		cerds, err := credentials.NewServerTLSFromFile(
+		if err := s.startGRPCServer(&eg, true); err != nil {
+			s.transitionToStopped("secure server startup failure")
+			return err
+		}
+	} else {
+		logV1.Info("Pass start secure gRPC server")
+	}
+
+	// Ping the servers to make sure all registered services are serving.
+	if s.healthz {
+		pingCtx, pingCancel := context.WithTimeout(s.ctx, s.PingTimeout)
+		err := s.ping(pingCtx)
+		pingCancel()
+		if err != nil {
+			s.transitionToStopped("health check failure")
+			return errors.Wrap(err, "gRPC server health check failed")
+		}
+	}
+
+	if err := eg.Wait(); err != nil {
+		s.transitionToStopped("error")
+		return errors.Wrap(err, "server exited with error")
+	}
+
+	s.transitionToStopped("normal exit")
+
+	// Normal exit, no cleanup needed (resources are cleaned up by Close)
+	cleanupNeeded = false
+	return nil
+}
+
+// buildServers creates fresh grpc.Server and health.Server instances for each serving.
+// TLS credentials are reloaded per run cycle to support certificate rotation.
+func (s *GenericGRPCServer[Svc, Store]) buildServers() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.SecureServingInfo != nil {
+		creds, err := credentials.NewServerTLSFromFile(
 			s.SecureServingInfo.CertKey.CertFile,
 			s.SecureServingInfo.CertKey.KeyFile,
 		)
 		if err != nil {
-			logV1.Fatal(err.Error())
-
-			return
+			return errors.Wrap(err, "failed to load server TLS credentials")
 		}
-		s.secureServer = grpc.NewServer(grpc.Creds(cerds))
+		s.secureServer = grpc.NewServer(grpc.Creds(creds))
 		if s.healthz {
 			s.secureSvrHealthz = health.NewServer()
 		}
@@ -143,317 +530,252 @@ func (s *GenericGRPCServer[Factory]) Setup() {
 			s.insecureSvrHealthz = health.NewServer()
 		}
 	}
+
+	return nil
 }
 
-func (s *GenericGRPCServer[Factory]) InstallMiddlewares() {
-	// necessary middlewareNames
-	// s.Use(limits.RequestSizeLimiter(10))
+// registerServices registers the health server and business services to each serving,
+// and registers service instances to the RA.
+func (s *GenericGRPCServer[Svc, Store]) registerServices() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	// install custom middlewareNames
-	// TODO:
-	// for _, m := range s.middlewareNames {
-	// mw, ok := middleware.Middlewares[m]
-	// if !ok {
-	//	log.Warnf("can not find middleware: %s", m)
+	s.registeredService = nil
 
-	//continue
-	//}
-
-	//log.Infof("install middleware: %s", m)
-	//s.Use(mw)
-	//}
-}
-
-func (s *GenericGRPCServer[Factory]) InstallServices() {
-	// check healthz handler
 	if s.healthz {
 		if s.insecureServer != nil {
 			logV1.Debug("Register health server for insecure gRPC server...")
 			grpc_health_v1.RegisterHealthServer(s.insecureServer, s.insecureSvrHealthz)
-			logV1.Debug("Registered health server for insecure gRPC server succeeded.")
 		}
-
 		if s.secureServer != nil {
 			logV1.Debug("Register health server for secure gRPC server...")
 			grpc_health_v1.RegisterHealthServer(s.secureServer, s.secureSvrHealthz)
-			logV1.Debug("Registered health server for secure gRPC server succeeded.")
 		}
 	}
-}
 
-func (s *GenericGRPCServer[Factory]) InstallRAClient() {
-	if s.RAInfo != nil {
-		var err error
-		s.registryClient, err = discover.NewKitConsulRegistryClient(s.RAInfo.Host, uint16(s.RAInfo.Port))
-		if err != nil {
-			logV1.Fatal(err.Error())
-
-			return
+	for svcname, register := range s.serviceRegisters {
+		if register == nil {
+			logV1.Warnf("Service register is nil: %s", svcname)
+			continue
 		}
-		id, err := uuid.NewV4()
-		if err != nil {
-			logV1.Fatal(err.Error())
 
-			return
-		}
-		s.instanceSuffixID = id.String()
-	}
-}
-
-func (s *GenericGRPCServer[Factory]) RegisterServices(registers map[string]svcregisterv1.ServiceRegister) {
-	f := func(
-		svcname string,
-		grpcSvr *grpc.Server,
-		healthSvr *health.Server,
-		svcRegister svcregisterv1.ServiceRegister,
-		bindHost string,
-		bindPort uint16,
-	) {
-		if svcRegister == nil {
-			logV1.Warn("service register is nil")
-
-			return
-		}
-		svcRegister(grpcSvr, healthSvr)
-		if s.registryClient != nil {
-			logV1.Debugf("Register service `%s` to RA for gRPC server...", svcname+"-"+s.instanceSuffixID)
-
-			s.registryClient.Register(
-				svcname,
-				svcname+"-"+s.instanceSuffixID,
-				bindHost,
-				bindPort,
-				nil,
-				logV1.K(),
-			)
-		}
-	}
-	for svcname, register := range registers {
 		if s.InsecureServingInfo != nil {
 			logV1.Debugf("Register service `%s` for insecure gRPC server...", svcname)
-			f(
-				svcname,
-				s.insecureServer,
-				s.insecureSvrHealthz,
-				register,
-				s.InsecureServingInfo.BindAddress,
-				uint16(s.InsecureServingInfo.BindPort),
-			)
+			register(s.insecureServer, s.insecureSvrHealthz)
+			s.registerToRA(svcname, s.InsecureServingInfo.BindAddress, uint16(s.InsecureServingInfo.BindPort))
 		}
 		if s.SecureServingInfo != nil {
 			logV1.Debugf("Register service `%s` for secure gRPC server...", svcname)
-			f(
-				svcname,
-				s.secureServer,
-				s.secureSvrHealthz,
-				register,
-				s.SecureServingInfo.BindAddress,
-				uint16(s.SecureServingInfo.BindPort),
-			)
+			register(s.secureServer, s.secureSvrHealthz)
+			s.registerToRA(svcname, s.SecureServingInfo.BindAddress, uint16(s.SecureServingInfo.BindPort))
 		}
 
 		s.registeredService = append(s.registeredService, svcname)
 	}
 }
 
-func initGenericGRPCServer[Factory any](s *GenericGRPCServer[Factory]) {
-	// do some setup
-
-	logV1.Debug("Setup generic gRPC server...")
-	s.Setup()
-	logV1.Debug("Install RA client for generic gRPC server...")
-	s.InstallRAClient()
-	logV1.Debug("Install middlewares for generic gRPC server...")
-	s.InstallMiddlewares()
-	logV1.Debug("Install services for generic gRPC server...")
-	s.InstallServices()
-}
-
-// NewGRPCServer returns a new instance of GenericGRPCServer from the given config.
-func (c CompletedGRPCServerConfig[Factory]) NewGRPCServer() (*GenericGRPCServer[Factory], error) {
-	if c.GRPCServing == nil {
-		c.GRPCServing = NewGRPCServingInfo()
+// registerToRA registers a service instance to the RA. Must be called with mu held.
+func (s *GenericGRPCServer[Svc, Store]) registerToRA(svcname, bindHost string, bindPort uint16) {
+	if s.registryClient == nil {
+		return
 	}
 
-	s := &GenericGRPCServer[Factory]{
-		SecureServingInfo:   c.SecureServing,
-		InsecureServingInfo: c.InsecureServing,
-		RAInfo:              c.RA,
-		ChunkSize:           c.GRPCServing.ChunkSize,
-		ReceiveTimeout:      time.Duration(c.GRPCServing.RecvTimeoutM) * time.Minute,
-		healthz:             c.Healthz,
-		enableMetrics:       c.EnableMetrics,
-		enableProfiling:     c.EnableProfiling,
-		middlewares:         c.Middlewares,
+	instanceID := svcname + "-" + s.instanceSuffixID
+	logV1.Debugf("Register service `%s` to RA for gRPC server...", instanceID)
+	if ok := s.registryClient.Register(svcname, instanceID, bindHost, bindPort, nil, logV1.K()); !ok {
+		logV1.Warnf("Failed to register service `%s` to RA", instanceID)
 	}
-
-	initGenericGRPCServer(s)
-
-	return s, nil
 }
 
-func (s *GenericGRPCServer[Factory]) servingRun(isSecure bool) error {
+// deregisterServices deregisters all service instances from the RA.
+// Safe to call multiple times.
+func (s *GenericGRPCServer[Svc, Store]) deregisterServices() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.registryClient == nil {
+		return
+	}
+
+	for _, svcname := range s.registeredService {
+		instanceID := svcname + "-" + s.instanceSuffixID
+		logV1.Debugf("Deregister service `%s` from RA for gRPC server...", instanceID)
+		if ok := s.registryClient.DeRegister(instanceID, logV1.K()); !ok {
+			logV1.Warnf("Failed to deregister service `%s` from RA", instanceID)
+		}
+	}
+	s.registeredService = nil
+}
+
+// startGRPCServer starts an insecure or secure gRPC server with proper lifecycle management.
+// The listener is created synchronously so that port conflicts are reported immediately.
+func (s *GenericGRPCServer[Svc, Store]) startGRPCServer(eg *errgroup.Group, isSecure bool) error {
 	var (
-		serverType   string
-		address      string
-		healthServer *health.Server
-		server       *grpc.Server
+		serverType string
+		address    string
+		server     *grpc.Server
+		healthSvr  *health.Server
 	)
 
+	s.mu.Lock()
 	if isSecure {
 		serverType = "secure"
 		address = s.SecureServingInfo.Address()
-		healthServer = s.secureSvrHealthz
 		server = s.secureServer
+		healthSvr = s.secureSvrHealthz
 	} else {
 		serverType = "insecure"
 		address = s.InsecureServingInfo.Address()
-		healthServer = s.insecureSvrHealthz
 		server = s.insecureServer
+		healthSvr = s.insecureSvrHealthz
 	}
+	s.mu.Unlock()
 
-	logV1.Infof("Start to listening the incoming requests on address: %s", address)
+	logV1.Infof("Starting %s gRPC server on %s", serverType, address)
 	lis, err := net.Listen("tcp", address)
 	if err != nil {
-		logV1.Errorf(
-			"Failed to listen the incoming requests on address: %s, %s",
-			address,
-			err.Error(),
-		)
-
-		return err
+		return errors.Wrapf(err, "failed to listen on %s", address)
 	}
 
 	if s.healthz {
-		healthServer.Resume()
-		defer healthServer.Shutdown()
+		healthSvr.Resume()
 	}
 
-	if err = server.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
-		logV1.Errorf("Failed to serve the %s server, %s", serverType, err.Error())
-
-		return err
-	}
-
-	logV1.Infof("Server on %s stopped", address)
+	eg.Go(func() error {
+		if err := server.Serve(lis); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			return errors.Wrapf(err, "%s gRPC server failed", serverType)
+		}
+		logV1.Infof("%s gRPC server on %s stopped", serverType, address)
+		return nil
+	})
 
 	return nil
 }
 
-// Run spawns the http server. It only returns when the port cannot be listened on initially.
-func (s *GenericGRPCServer[Factory]) run() error {
-	if s.workContext != nil {
-		return errors.New("work context already set, the generic gRPC server maybe have already started")
+// stopGRPCServers stops all servers gracefully with a forced stop fallback.
+// Safe to call when servers are nil or already stopped.
+func (s *GenericGRPCServer[Svc, Store]) stopGRPCServers() {
+	s.mu.Lock()
+	insecureServer, secureServer := s.insecureServer, s.secureServer
+	insecureHealth, secureHealth := s.insecureSvrHealthz, s.secureSvrHealthz
+	s.mu.Unlock()
+
+	var eg errgroup.Group
+	if insecureServer != nil {
+		s.stopGRPCServer(&eg, insecureServer, insecureHealth, "insecure")
+	}
+	if secureServer != nil {
+		s.stopGRPCServer(&eg, secureServer, secureHealth, "secure")
+	}
+	_ = eg.Wait()
+}
+
+// stopGRPCServer adds a server shutdown task to the error group.
+// GracefulStop is bounded by ShutdownTimeout; on timeout the server is force-stopped
+// to prevent hanging on long-lived streaming RPCs.
+func (s *GenericGRPCServer[Svc, Store]) stopGRPCServer(eg *errgroup.Group, server *grpc.Server, healthSvr *health.Server, serverType string) {
+	eg.Go(func() error {
+		logV1.Debugf("Shutting down %s gRPC server", serverType)
+
+		done := make(chan struct{})
+		go func() {
+			server.GracefulStop()
+			close(done)
+		}()
+
+		timer := time.NewTimer(s.ShutdownTimeout)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
+			logV1.Warnf("%s gRPC server graceful stop timed out after %s, forcing stop", serverType, s.ShutdownTimeout)
+			server.Stop()
+			<-done
+		}
+
+		if healthSvr != nil {
+			healthSvr.Shutdown()
+		}
+		logV1.Debugf("%s gRPC server shutdown complete", serverType)
+		return nil
+	})
+}
+
+// Close gracefully shuts down the gRPC server.
+// Safe to call multiple times; concurrent calls are idempotent.
+func (s *GenericGRPCServer[Svc, Store]) Close() error {
+	// Atomic state transition: Running -> Closing
+	if !s.state.CompareAndSwap(ServerStateRunning, ServerStateClosing) {
+		currentState := s.state.Load()
+		if currentState == ServerStateCreated {
+			logV1.Debug("Server not started, cleaning up business resources")
+			s.shutdownBeforeRun.Store(true)
+			if err := s.cleanupBiz(); err != nil {
+				return err
+			}
+			logV1.Debug("Business resources cleaned up")
+			s.state.Store(ServerStateStopped)
+			return nil
+		}
+		if currentState == ServerStateClosing {
+			logV1.Debug("Server close already in progress")
+			return nil
+		}
+		if currentState == ServerStateStopped {
+			logV1.Debug("Server already closed")
+			return nil
+		}
+		return errors.Errorf("server cannot be closed in current state: %d", currentState)
 	}
 
-	var done context.CancelFunc
-	s.workContext, done = context.WithCancel(context.Background())
-	defer done()
+	logV1.Debug("Server state transition: Running -> Closing")
 
-	eg, _ := errgroup.WithContext(s.workContext)
+	// Perform actual close
+	err := s.close()
 
-	// Initializing the server in a goroutine so that
-	// it won't block the graceful shutdown handling below
-	logV1.Debugf("Goroutine start the insecure gRPC server...")
-	if s.InsecureServingInfo != nil {
-		eg.Go(func() error { return s.servingRun(false) })
-	} else {
-		logV1.Info("Pass start insecure server")
+	s.state.Store(ServerStateStopped)
+	logV1.Debug("Server state transition: Closing -> Stopped")
+
+	return err
+}
+
+// transitionToStopped atomically transitions the server state from Running to Stopped.
+func (s *GenericGRPCServer[Svc, Store]) transitionToStopped(reason string) {
+	if s.state.CompareAndSwap(ServerStateRunning, ServerStateStopped) {
+		logV1.Debugf("Server state transition: Running -> Stopped (reason: %s)", reason)
+	}
+}
+
+// close performs the actual shutdown logic.
+func (s *GenericGRPCServer[Svc, Store]) close() error {
+	logV1.Info("Shutting down gRPC server")
+
+	// Deregister from RA first so that no new traffic is routed to this instance.
+	s.deregisterServices()
+
+	// Gracefully stop servers, with a forced stop fallback after ShutdownTimeout.
+	s.stopGRPCServers()
+
+	// Cancel internal context to propagate shutdown signal to all dependent goroutines.
+	// cancel may be nil if Close is called before Run creates the context.
+	// This is done AFTER server graceful shutdown to allow in-flight requests to complete.
+	if s.cancel != nil {
+		s.cancel()
 	}
 
-	logV1.Debugf("Goroutine start the secure gRPC server...")
-	if s.SecureServingInfo != nil {
-		eg.Go(func() error { return s.servingRun(true) })
-	} else {
-		logV1.Info("Pass start secure server")
-	}
-
-	// Ping the server to make sure the router is working.
-	if s.healthz {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		eg.Go(func() error {
-			logV1.Debugf("Start to run the health check...")
-
-			return s.ping(ctx)
-		})
-	}
-
-	if err := eg.Wait(); err != nil {
-		logV1.Errorf("%+v", err.Error())
-
+	// Clean up business resources (Store/Service) regardless of server shutdown result.
+	// Reuse cleanupBiz to centralize cleanup logic and error handling.
+	if err := s.cleanupBiz(); err != nil {
+		logV1.Error("gRPC server shutdown completed with errors")
 		return err
 	}
 
+	logV1.Info("gRPC server shutdown completed")
 	return nil
 }
 
-// Close graceful shutdown the api server.
-func (s *GenericGRPCServer[Factory]) Close() {
-	// The context is used to inform the server it has 10 seconds to finish
-	// the request it is currently handling
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	stopeg, stopCtx := errgroup.WithContext(ctx)
-	stopWait := func() {
-		if s.workContext != nil {
-			select {
-			case <-s.workContext.Done():
-			case <-stopCtx.Done():
-			}
-		}
-	}
-
-	// deregister services
-	stopeg.Go(func() error {
-		defer stopWait()
-
-		if s.registryClient != nil {
-			for _, servicename := range s.registeredService {
-				s.registryClient.DeRegister(servicename+"-"+s.instanceSuffixID, logV1.K())
-			}
-		}
-
-		return nil
-	})
-
-	// stop the secure server
-	stopeg.Go(func() error {
-		defer stopWait()
-
-		if s.secureServer != nil {
-			s.secureServer.GracefulStop()
-			if s.healthz {
-				s.secureSvrHealthz.Shutdown()
-			}
-			logV1.Info("Secure server has been stopped!")
-		}
-
-		return nil
-	})
-
-	// stop the insecure server
-	stopeg.Go(func() error {
-		defer stopWait()
-
-		if s.insecureServer != nil {
-			s.insecureServer.GracefulStop()
-			if s.healthz {
-				s.insecureSvrHealthz.Shutdown()
-			}
-			logV1.Info("Insecure server has been stopped!")
-		}
-
-		return nil
-	})
-
-	if err := stopeg.Wait(); err != nil && !errors.Is(err, context.Canceled) {
-		logV1.Errorf("failed to close the generic grpc server, cased by: %+v", err.Error())
-	}
-}
-
-func (s *GenericGRPCServer[Factory]) setupPing(isSecure bool) (*healthzclientv1.Client, error) {
+// setupPing creates a health check client for the given serving.
+func (s *GenericGRPCServer[Svc, Store]) setupPing(isSecure bool) (*healthzclientv1.Client, error) {
 	var (
 		serverType string
 		address    string
@@ -469,7 +791,7 @@ func (s *GenericGRPCServer[Factory]) setupPing(isSecure bool) (*healthzclientv1.
 			s.SecureServingInfo.BindAddress,
 		)
 		if err != nil {
-			return nil, err
+			return nil, errors.Wrap(err, "failed to load client TLS credentials")
 		}
 	} else {
 		serverType = "insecure"
@@ -478,94 +800,109 @@ func (s *GenericGRPCServer[Factory]) setupPing(isSecure bool) (*healthzclientv1.
 	}
 
 	logV1.Debugf("initialization %s server health check...", serverType)
-	if strings.Contains(address, "0.0.0.0") {
-		address = fmt.Sprintf("127.0.0.1:%s", strings.Split(address, ":")[1])
+	if strings.HasPrefix(address, "0.0.0.0") {
+		idx := strings.LastIndex(address, ":")
+		if idx == -1 {
+			return nil, errors.Errorf("invalid address format: %s", address)
+		}
+		address = "127.0.0.1" + address[idx:]
 	}
 
 	return healthzclientv1.NewClient(address, grpc.WithTransportCredentials(creds))
 }
 
-// ping pings the grpc server to make sure the server is working.
-func (s *GenericGRPCServer[Factory]) ping(ctx context.Context) error {
+// ping verifies all registered services on all servings are SERVING.
+// It retries with exponential backoff until the context is done.
+func (s *GenericGRPCServer[Svc, Store]) ping(ctx context.Context) error {
 	healthzClients := make(map[string]*healthzclientv1.Client)
 	if s.InsecureServingInfo != nil {
 		client, err := s.setupPing(false)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed to setup insecure health check client")
 		}
-
-		defer func(client *healthzclientv1.Client) {
-			err := client.Close()
-			if err != nil {
+		defer func() {
+			if err := client.Close(); err != nil {
 				logV1.Warn(err.Error())
 			}
-		}(client)
-
+		}()
 		healthzClients["insecure"] = client
 	}
 
 	if s.SecureServingInfo != nil {
 		client, err := s.setupPing(true)
 		if err != nil {
-			return err
+			return errors.Wrap(err, "failed to setup secure health check client")
 		}
-
-		defer func(client *healthzclientv1.Client) {
-			err := client.Close()
-			if err != nil {
+		defer func() {
+			if err := client.Close(); err != nil {
 				logV1.Warn(err.Error())
 			}
-		}(client)
-
+		}()
 		healthzClients["secure"] = client
+	}
+
+	if len(healthzClients) == 0 {
+		return errors.New("no serving information available for health check")
+	}
+
+	// Snapshot service names to avoid racing with deregistration.
+	s.mu.Lock()
+	svcnames := append([]string{}, s.registeredService...)
+	s.mu.Unlock()
+	if len(svcnames) == 0 {
+		// Fall back to the overall server health status.
+		svcnames = []string{""}
 	}
 
 	healthzOK := make(map[string]bool)
 
+	// Exponential backoff: 1s -> 2s -> 4s -> 8s (max 8s)
+	backoff := 1 * time.Second
+	maxBackoff := 8 * time.Second
+
 	for {
 		for tag, client := range healthzClients {
-			for _, svcname := range s.registeredService {
-				if ok, has := healthzOK[tag+" "+svcname]; has && ok {
+			for _, svcname := range svcnames {
+				key := tag + " " + svcname
+				if healthzOK[key] {
 					continue
 				}
 
 				status, err := client.Check(ctx, svcname)
 				if err != nil {
-					logV1.Info(err.Error())
-					healthzOK[tag+" "+svcname] = false
-
+					logV1.Debugf("Health check for `%s` failed: %v", key, err)
+					healthzOK[key] = false
 					continue
 				}
-				healthzOK[tag+" "+svcname] = true
-				logV1.Infof("The `%s` %s-service state is: %v", svcname, tag, healthzclientv1.StatusString(status))
+
+				healthzOK[key] = status == healthzclientv1.SERVING
+				if healthzOK[key] {
+					logV1.Infof("The `%s` %s-service state is: %v", svcname, tag, healthzclientv1.StatusString(status))
+				}
 			}
 		}
 
 		allOK := true
-		for tSvcname, ok := range healthzOK {
+		for key, ok := range healthzOK {
 			if !ok {
 				allOK = false
-				logV1.Debugf("service `%s` is not healthy.", tSvcname)
+				logV1.Debugf("service `%s` is not healthy.", key)
 			}
 		}
 
 		if allOK {
-			logV1.Infof("all services are healthy!")
-
+			logV1.Info("all services are healthy!")
 			return nil
 		}
 
-		// Sleep for a second to continue the next ping.
-		logV1.Info("Waiting for the router, retry in 1 second.")
-		time.Sleep(1 * time.Second)
-
 		select {
 		case <-ctx.Done():
-			logV1.Fatal("can not check grpc server health within the specified time interval.")
-		default:
-			if len(healthzClients) == 0 {
-				logV1.Fatal("can not check grpc server health")
-			}
+			return errors.New("gRPC server health check timed out")
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
 		}
 	}
 }

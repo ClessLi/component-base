@@ -126,48 +126,81 @@ func NewAPIServerRunOptions[Svc any, Store any]() (o *APIServerRunOptions[Svc, S
 }
 
 // GRPCServerRunOptions contains the options for running a generic gRPC server.
-type GRPCServerRunOptions[Svc any] struct {
-	Healthz     bool     `json:"healthz"     mapstructure:"healthz"`
-	Middlewares []string `json:"middlewares" mapstructure:"middlewares"`
+type GRPCServerRunOptions[Svc any, Store any] struct {
+	Healthz         bool          `json:"healthz"          mapstructure:"healthz"`
+	Middlewares     []string      `json:"middlewares"      mapstructure:"middlewares"`
+	PingTimeout     time.Duration `json:"ping-timeout"     mapstructure:"ping-timeout"`
+	ShutdownTimeout time.Duration `json:"shutdown-timeout" mapstructure:"shutdown-timeout"`
 }
 
 // NewGRPCServerRunOptions creates a new GRPCServerRunOptions with default values.
-func NewGRPCServerRunOptions[Svc any]() (o *GRPCServerRunOptions[Svc]) {
-	defaults := server.NewGRPCServerConfig[Svc]()
+func NewGRPCServerRunOptions[Svc any, Store any]() (o *GRPCServerRunOptions[Svc, Store]) {
+	defaults := server.NewGRPCServerConfig[Svc, Store]()
 
-	return &GRPCServerRunOptions[Svc]{
-		Healthz:     defaults.Healthz,
-		Middlewares: defaults.Middlewares,
+	return &GRPCServerRunOptions[Svc, Store]{
+		Healthz:         defaults.Healthz,
+		Middlewares:     defaults.Middlewares,
+		PingTimeout:     defaults.PingTimeout,
+		ShutdownTimeout: defaults.ShutdownTimeout,
 	}
 }
 
 // AddFlags adds flags for the gRPC server to the specified FlagSet.
-func (s *GRPCServerRunOptions[Svc]) AddFlags(fs *pflag.FlagSet) {
+func (s *GRPCServerRunOptions[Svc, Store]) AddFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&s.Healthz, "server.healthz", s.Healthz,
 		"Enable health check service.")
 
 	fs.StringSliceVar(&s.Middlewares, "server.middlewares", s.Middlewares,
 		"List of middlewares to enable. If empty, default middlewares will be used.")
+
+	fs.DurationVar(&s.PingTimeout, "server.ping-timeout", s.PingTimeout,
+		"Timeout for health check pings.")
+
+	fs.DurationVar(&s.ShutdownTimeout, "server.shutdown-timeout", s.ShutdownTimeout,
+		"Graceful shutdown timeout.")
 }
 
 // Validate validates the gRPC server run options.
-func (s *GRPCServerRunOptions[Svc]) Validate() []error {
-	// TODO: implement validation logic
-	return nil
+func (s *GRPCServerRunOptions[Svc, Store]) Validate() []error {
+	errs := make([]error, 0)
+
+	if s.PingTimeout < 0 {
+		errs = append(errs, errors.Errorf(
+			"--server.ping-timeout %v: must be greater than or equal to 0",
+			s.PingTimeout,
+		))
+	}
+
+	if s.ShutdownTimeout < 0 {
+		errs = append(errs, errors.Errorf(
+			"--server.shutdown-timeout %v: must be greater than or equal to 0",
+			s.ShutdownTimeout,
+		))
+	}
+
+	return errs
 }
 
 // Complete fills in default values for unset fields.
-func (s *GRPCServerRunOptions[Svc]) Complete() error {
+func (s *GRPCServerRunOptions[Svc, Store]) Complete() error {
 	if s.Middlewares == nil {
 		s.Middlewares = []string{}
+	}
+	if s.PingTimeout == 0 {
+		s.PingTimeout = 30 * time.Second
+	}
+	if s.ShutdownTimeout == 0 {
+		s.ShutdownTimeout = 30 * time.Second
 	}
 	return nil
 }
 
 // ApplyTo applies the run options to the gRPC server config.
-func (s *GRPCServerRunOptions[Svc]) ApplyTo(c *server.GRPCServerConfig[Svc]) error {
+func (s *GRPCServerRunOptions[Svc, Store]) ApplyTo(c *server.GRPCServerConfig[Svc, Store]) error {
 	c.Healthz = s.Healthz
 	c.Middlewares = s.Middlewares
+	c.PingTimeout = s.PingTimeout
+	c.ShutdownTimeout = s.ShutdownTimeout
 
 	return nil
 }

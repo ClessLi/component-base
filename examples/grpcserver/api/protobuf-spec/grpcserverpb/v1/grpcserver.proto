@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+option go_package = "api/protobuf-spec/grpcserverpb/v1";
+package grpcserverpb;  // 服务名
+
+// Demo 是 gRPC 服务端示例服务，用于演示 component-base 通用 gRPC 服务端框架的
+// 一元 RPC 与服务器流式 RPC 两种形态（参考 bifrost 的 WebServerBinCMD.Exec 与 WebServerStatus.Get）。
+service Demo {
+  // Echo 一元 RPC：回显请求消息，演示 传输层->端点层->中间件层->服务层->存储层 链路。
+  rpc Echo(EchoRequest) returns (EchoResponse) {}
+  // Download 服务器流式 RPC：按 ChunkSize 分块下发数据，演示 transport.StreamSendMsg。
+  rpc Download(DownloadRequest) returns (stream Chunk) {}
+}
+
+message EchoRequest {
+  string Message = 1;
+}
+
+message EchoResponse {
+  string Message = 1;
+}
+
+message DownloadRequest {
+  string Key = 1;
+}
+
+message Chunk {
+  bytes Data = 1;
+}
