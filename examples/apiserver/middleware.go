@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 
+	apiv1 "github.com/ClessLi/component-base/examples/apiserver/api/v1"
 	httpmwv1 "github.com/ClessLi/component-base/pkg/generic_server/framework/http/middleware/v1"
 	methodlog "github.com/ClessLi/component-base/pkg/methodlog/v1"
 )
@@ -42,8 +43,8 @@ type loggingUserService struct {
 	next UserService
 }
 
-func (l *loggingUserService) Get(ctx context.Context, id string) (*User, error) {
-	var u *User
+func (l *loggingUserService) Get(ctx context.Context, id string) (*apiv1.User, error) {
+	var u *apiv1.User
 	err := methodlog.New(ctx, l.next.Get, methodlog.WithFieldExtractor(methodlog.HTTPFieldExtractor)).
 		AddInfos(func() []interface{} {
 			return []interface{}{"id", id}
@@ -54,7 +55,7 @@ func (l *loggingUserService) Get(ctx context.Context, id string) (*User, error) 
 			}
 			return "not found"
 		}).
-		Action(func(m func(context.Context, string) (*User, error)) error {
+		Action(func(m func(context.Context, string) (*apiv1.User, error)) error {
 			var e error
 			u, e = m(ctx, id)
 			return e
@@ -63,13 +64,13 @@ func (l *loggingUserService) Get(ctx context.Context, id string) (*User, error) 
 	return u, err
 }
 
-func (l *loggingUserService) List(ctx context.Context) ([]*User, error) {
-	var users []*User
+func (l *loggingUserService) List(ctx context.Context) ([]*apiv1.User, error) {
+	var users []*apiv1.User
 	err := methodlog.New(ctx, l.next.List, methodlog.WithFieldExtractor(methodlog.HTTPFieldExtractor)).
 		Result(func() string {
 			return fmt.Sprintf("%d users", len(users))
 		}).
-		Action(func(m func(context.Context) ([]*User, error)) error {
+		Action(func(m func(context.Context) ([]*apiv1.User, error)) error {
 			var e error
 			users, e = m(ctx)
 			return e
@@ -78,8 +79,8 @@ func (l *loggingUserService) List(ctx context.Context) ([]*User, error) {
 	return users, err
 }
 
-func (l *loggingUserService) Create(ctx context.Context, name string) (*User, error) {
-	var u *User
+func (l *loggingUserService) Create(ctx context.Context, name string) (*apiv1.User, error) {
+	var u *apiv1.User
 	err := methodlog.New(ctx, l.next.Create, methodlog.WithFieldExtractor(methodlog.HTTPFieldExtractor)).
 		AddInfos(func() []interface{} {
 			return []interface{}{"name", name}
@@ -90,7 +91,7 @@ func (l *loggingUserService) Create(ctx context.Context, name string) (*User, er
 			}
 			return "created"
 		}).
-		Action(func(m func(context.Context, string) (*User, error)) error {
+		Action(func(m func(context.Context, string) (*apiv1.User, error)) error {
 			var e error
 			u, e = m(ctx, name)
 			return e
