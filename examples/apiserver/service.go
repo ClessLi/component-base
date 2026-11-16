@@ -4,13 +4,17 @@
 
 package apiserver
 
-import "context"
+import (
+	"context"
+
+	apiv1 "github.com/ClessLi/component-base/examples/apiserver/api/v1"
+)
 
 // UserService defines the business operations for the user resource.
 type UserService interface {
-	Get(ctx context.Context, id string) (*User, error)
-	List(ctx context.Context) ([]*User, error)
-	Create(ctx context.Context, name string) (*User, error)
+	Get(ctx context.Context, id string) (*apiv1.User, error)
+	List(ctx context.Context) ([]*apiv1.User, error)
+	Create(ctx context.Context, name string) (*apiv1.User, error)
 }
 
 // ServiceFactory provides access to all service instances. It is the entry point
@@ -41,14 +45,14 @@ func NewUserService(store UserStore) UserService {
 	return &userService{store: store}
 }
 
-func (s *userService) Get(ctx context.Context, id string) (*User, error) {
+func (s *userService) Get(ctx context.Context, id string) (*apiv1.User, error) {
 	return s.store.Get(id)
 }
 
-func (s *userService) List(ctx context.Context) ([]*User, error) {
+func (s *userService) List(ctx context.Context) ([]*apiv1.User, error) {
 	return s.store.List()
 }
 
-func (s *userService) Create(ctx context.Context, name string) (*User, error) {
+func (s *userService) Create(ctx context.Context, name string) (*apiv1.User, error) {
 	return s.store.Create(name)
 }

@@ -7,6 +7,7 @@ package apiserver
 import (
 	"net/http"
 
+	apiv1 "github.com/ClessLi/component-base/examples/apiserver/api/v1"
 	"github.com/ClessLi/component-base/pkg/core"
 	methodlog "github.com/ClessLi/component-base/pkg/methodlog/v1"
 	"github.com/gin-gonic/gin"
@@ -38,9 +39,7 @@ func (ctl *UserController) List(c *gin.Context) {
 
 // Create handles POST /v1/users.
 func (ctl *UserController) Create(c *gin.Context) {
-	var req struct {
-		Name string `json:"name"`
-	}
+	var req apiv1.CreateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
