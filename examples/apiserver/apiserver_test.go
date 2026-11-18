@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	apiv1 "github.com/ClessLi/component-base/examples/apiserver/api/v1"
 	genericserver "github.com/ClessLi/component-base/pkg/generic_server/server"
 )
 
@@ -41,7 +42,7 @@ func TestAPIServer(t *testing.T) {
 
 	// Create a user.
 	rec := doRequest(t, srv, http.MethodPost, "/v1/users", bytes.NewBufferString(`{"name":"alice"}`), http.StatusOK)
-	var created User
+	var created apiv1.User
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode created user: %v", err)
 	}
@@ -51,7 +52,7 @@ func TestAPIServer(t *testing.T) {
 
 	// Get the user back.
 	rec = doRequest(t, srv, http.MethodGet, "/v1/users/1", nil, http.StatusOK)
-	var got User
+	var got apiv1.User
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("decode user: %v", err)
 	}
@@ -61,7 +62,7 @@ func TestAPIServer(t *testing.T) {
 
 	// List users.
 	rec = doRequest(t, srv, http.MethodGet, "/v1/users", nil, http.StatusOK)
-	var list []*User
+	var list []*apiv1.User
 	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil {
 		t.Fatalf("decode user list: %v", err)
 	}
