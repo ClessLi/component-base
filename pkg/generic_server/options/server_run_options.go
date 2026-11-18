@@ -126,7 +126,7 @@ func NewAPIServerRunOptions[Svc any, Store any]() (o *APIServerRunOptions[Svc, S
 }
 
 // GRPCServerRunOptions contains the options for running a generic gRPC server.
-type GRPCServerRunOptions[Svc any, Store any] struct {
+type GRPCServerRunOptions[Txp, Ep, Svc, Store any] struct {
 	Healthz         bool          `json:"healthz"          mapstructure:"healthz"`
 	Middlewares     []string      `json:"middlewares"      mapstructure:"middlewares"`
 	PingTimeout     time.Duration `json:"ping-timeout"     mapstructure:"ping-timeout"`
@@ -134,10 +134,10 @@ type GRPCServerRunOptions[Svc any, Store any] struct {
 }
 
 // NewGRPCServerRunOptions creates a new GRPCServerRunOptions with default values.
-func NewGRPCServerRunOptions[Svc any, Store any]() (o *GRPCServerRunOptions[Svc, Store]) {
-	defaults := server.NewGRPCServerConfig[Svc, Store]()
+func NewGRPCServerRunOptions[Txp, Ep, Svc, Store any]() (o *GRPCServerRunOptions[Txp, Ep, Svc, Store]) {
+	defaults := server.NewGRPCServerConfig[Txp, Ep, Svc, Store]()
 
-	return &GRPCServerRunOptions[Svc, Store]{
+	return &GRPCServerRunOptions[Txp, Ep, Svc, Store]{
 		Healthz:         defaults.Healthz,
 		Middlewares:     defaults.Middlewares,
 		PingTimeout:     defaults.PingTimeout,
@@ -146,7 +146,7 @@ func NewGRPCServerRunOptions[Svc any, Store any]() (o *GRPCServerRunOptions[Svc,
 }
 
 // AddFlags adds flags for the gRPC server to the specified FlagSet.
-func (s *GRPCServerRunOptions[Svc, Store]) AddFlags(fs *pflag.FlagSet) {
+func (s *GRPCServerRunOptions[Txp, Ep, Svc, Store]) AddFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&s.Healthz, "server.healthz", s.Healthz,
 		"Enable health check service.")
 
@@ -161,7 +161,7 @@ func (s *GRPCServerRunOptions[Svc, Store]) AddFlags(fs *pflag.FlagSet) {
 }
 
 // Validate validates the gRPC server run options.
-func (s *GRPCServerRunOptions[Svc, Store]) Validate() []error {
+func (s *GRPCServerRunOptions[Txp, Ep, Svc, Store]) Validate() []error {
 	errs := make([]error, 0)
 
 	if s.PingTimeout < 0 {
@@ -182,7 +182,7 @@ func (s *GRPCServerRunOptions[Svc, Store]) Validate() []error {
 }
 
 // Complete fills in default values for unset fields.
-func (s *GRPCServerRunOptions[Svc, Store]) Complete() error {
+func (s *GRPCServerRunOptions[Txp, Ep, Svc, Store]) Complete() error {
 	if s.Middlewares == nil {
 		s.Middlewares = []string{}
 	}
@@ -196,7 +196,7 @@ func (s *GRPCServerRunOptions[Svc, Store]) Complete() error {
 }
 
 // ApplyTo applies the run options to the gRPC server config.
-func (s *GRPCServerRunOptions[Svc, Store]) ApplyTo(c *server.GRPCServerConfig[Svc, Store]) error {
+func (s *GRPCServerRunOptions[Txp, Ep, Svc, Store]) ApplyTo(c *server.GRPCServerConfig[Txp, Ep, Svc, Store]) error {
 	c.Healthz = s.Healthz
 	c.Middlewares = s.Middlewares
 	c.PingTimeout = s.PingTimeout

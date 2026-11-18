@@ -18,8 +18,8 @@
 // Assembly and lifecycle:
 //
 //	Options -> CreateConfigFromOptions -> GRPCServerConfig
-//	        -> NewServer(ctx, cfg) -> GenericGRPCServer
-//	        -> PrepareRun() -> Run()
+//	        -> NewServer(ctx, cfg): cfg.Complete().NewGRPCServer(ctx, hooks)
+//	        -> GenericGRPCServer -> PrepareRun() -> Run()
 //
 // bizHooks implements GRPCServerBizHooks[Factory, DemoEndpoints, ServiceFactory, StoreFactory];
 // each method only delegates to its own layer constructor. The call order is
