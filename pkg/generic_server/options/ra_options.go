@@ -8,18 +8,18 @@ import (
 )
 
 // RAOptions contains the options used to connect to the RA server.
-type RAOptions[Svc any, Store any] struct {
+type RAOptions[Txp, Ep, Svc, Store any] struct {
 	Host string `json:"host" mapstructure:"host"`
 	Port int    `json:"port" mapstructure:"port"`
 }
 
 // NewRAOptions creates a new RAOptions object with default parameters.
-func NewRAOptions[Svc any, Store any]() *RAOptions[Svc, Store] {
-	return &RAOptions[Svc, Store]{}
+func NewRAOptions[Txp, Ep, Svc, Store any]() *RAOptions[Txp, Ep, Svc, Store] {
+	return &RAOptions[Txp, Ep, Svc, Store]{}
 }
 
 // AddFlags adds command-line flags for RAOptions.
-func (ra *RAOptions[Svc, Store]) AddFlags(fs *pflag.FlagSet) {
+func (ra *RAOptions[Txp, Ep, Svc, Store]) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&ra.Host, "ra.host", ra.Host,
 		"Specifies the bind address of the Registration Authority server. Set empty to disable.")
 
@@ -28,7 +28,7 @@ func (ra *RAOptions[Svc, Store]) AddFlags(fs *pflag.FlagSet) {
 }
 
 // Validate validates the RA options.
-func (ra *RAOptions[Svc, Store]) Validate() []error {
+func (ra *RAOptions[Txp, Ep, Svc, Store]) Validate() []error {
 	errs := make([]error, 0)
 
 	if len(ra.Host) > 0 && (ra.Port < 1 || ra.Port > 65535) {
@@ -42,12 +42,12 @@ func (ra *RAOptions[Svc, Store]) Validate() []error {
 }
 
 // Complete fills in default values for unset fields.
-func (ra *RAOptions[Svc, Store]) Complete() error {
+func (ra *RAOptions[Txp, Ep, Svc, Store]) Complete() error {
 	return nil
 }
 
 // ApplyTo applies the RA options to the gRPC server config.
-func (ra *RAOptions[Svc, Store]) ApplyTo(c *server.GRPCServerConfig[Svc, Store]) error {
+func (ra *RAOptions[Txp, Ep, Svc, Store]) ApplyTo(c *server.GRPCServerConfig[Txp, Ep, Svc, Store]) error {
 	if ra == nil || ra.Port == 0 {
 		c.RA = nil
 		return nil

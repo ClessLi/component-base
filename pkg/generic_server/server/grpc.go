@@ -47,7 +47,9 @@ func NewGRPCServingInfo() *GRPCServingInfo {
 
 // GRPCServerConfig is a structure used to configure a GenericGRPCServer.
 // Its members are sorted roughly in order of importance for composers.
-type GRPCServerConfig[Svc any, Store any] struct {
+// The endpoint/transport type parameters are carried here so that the config
+// chain can fluently build the server via CompletedGRPCServerConfig.NewGRPCServer.
+type GRPCServerConfig[Txp, Ep, Svc, Store any] struct {
 	Namespace       string
 	SecureServing   *SecureServingInfo
 	InsecureServing *InsecureServingInfo
@@ -62,8 +64,8 @@ type GRPCServerConfig[Svc any, Store any] struct {
 }
 
 // NewGRPCServerConfig returns a GRPCServerConfig struct with the default values.
-func NewGRPCServerConfig[Svc any, Store any]() *GRPCServerConfig[Svc, Store] {
-	return &GRPCServerConfig[Svc, Store]{
+func NewGRPCServerConfig[Txp, Ep, Svc, Store any]() *GRPCServerConfig[Txp, Ep, Svc, Store] {
+	return &GRPCServerConfig[Txp, Ep, Svc, Store]{
 		Healthz:         true,
 		Middlewares:     []string{},
 		EnableProfiling: true,
@@ -74,13 +76,13 @@ func NewGRPCServerConfig[Svc any, Store any]() *GRPCServerConfig[Svc, Store] {
 }
 
 // CompletedGRPCServerConfig is the completed configuration for GenericGRPCServer.
-type CompletedGRPCServerConfig[Svc any, Store any] struct {
-	*GRPCServerConfig[Svc, Store]
+type CompletedGRPCServerConfig[Txp, Ep, Svc, Store any] struct {
+	*GRPCServerConfig[Txp, Ep, Svc, Store]
 }
 
 // Complete fills in any fields not set that are required to have valid data and can be derived
 // from other fields. If you're going to `ApplyOptions`, do that first. It's mutating the receiver.
-func (c *GRPCServerConfig[Svc, Store]) Complete() CompletedGRPCServerConfig[Svc, Store] {
+func (c *GRPCServerConfig[Txp, Ep, Svc, Store]) Complete() CompletedGRPCServerConfig[Txp, Ep, Svc, Store] {
 	if c.GRPCServing == nil {
 		c.GRPCServing = NewGRPCServingInfo()
 	}
@@ -90,7 +92,7 @@ func (c *GRPCServerConfig[Svc, Store]) Complete() CompletedGRPCServerConfig[Svc,
 	if c.ShutdownTimeout == 0 {
 		c.ShutdownTimeout = 30 * time.Second
 	}
-	return CompletedGRPCServerConfig[Svc, Store]{GRPCServerConfig: c}
+	return CompletedGRPCServerConfig[Txp, Ep, Svc, Store]{GRPCServerConfig: c}
 }
 
 // GenericGRPCServer contains state for a generic gRPC server.
@@ -360,9 +362,7 @@ func (s *GenericGRPCServer[Txp, Ep, Svc, Store]) cleanupRunState() {
 }
 
 // NewGRPCServer returns a new GenericGRPCServer instance from the given config.
-// It is a package-level function because the endpoint/transport type parameters
-// are runtime assembly concerns that the config and options layers do not carry.
-func NewGRPCServer[Txp any, Ep any, Svc any, Store any](ctx context.Context, c CompletedGRPCServerConfig[Svc, Store], bizHooks GRPCServerBizHooks[Txp, Ep, Svc, Store]) *GenericGRPCServer[Txp, Ep, Svc, Store] {
+func (c CompletedGRPCServerConfig[Txp, Ep, Svc, Store]) NewGRPCServer(ctx context.Context, bizHooks GRPCServerBizHooks[Txp, Ep, Svc, Store]) *GenericGRPCServer[Txp, Ep, Svc, Store] {
 	if bizHooks == nil {
 		logV1.Panicf("bizHooks must not be nil")
 	}

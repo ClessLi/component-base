@@ -14,17 +14,17 @@ import (
 
 // Options holds the configuration options for the example gRPC server.
 type Options struct {
-	GRPCServerRunOptions   *genericoptions.GRPCServerRunOptions[ServiceFactory, StoreFactory]
-	GRPCServingOptions     *genericoptions.GRPCServingOptions[ServiceFactory, StoreFactory]
+	GRPCServerRunOptions   *genericoptions.GRPCServerRunOptions[Factory, DemoEndpoints, ServiceFactory, StoreFactory]
+	GRPCServingOptions     *genericoptions.GRPCServingOptions[Factory, DemoEndpoints, ServiceFactory, StoreFactory]
 	InsecureServingOptions *genericoptions.InsecureServingOptions[ServiceFactory, StoreFactory]
 }
 
 // NewOptions creates Options with sensible defaults for the example.
 func NewOptions() *Options {
-	runOpts := genericoptions.NewGRPCServerRunOptions[ServiceFactory, StoreFactory]()
+	runOpts := genericoptions.NewGRPCServerRunOptions[Factory, DemoEndpoints, ServiceFactory, StoreFactory]()
 	runOpts.Middlewares = []string{"logging"}
 
-	servingOpts := genericoptions.NewGRPCServingOptions[ServiceFactory, StoreFactory]()
+	servingOpts := genericoptions.NewGRPCServingOptions[Factory, DemoEndpoints, ServiceFactory, StoreFactory]()
 
 	insecureOpts := genericoptions.NewInsecureServingOptions[ServiceFactory, StoreFactory]()
 	insecureOpts.BindAddress = "127.0.0.1"
@@ -38,7 +38,7 @@ func NewOptions() *Options {
 }
 
 // CreateConfigFromOptions validates, completes and applies options to a server config.
-func CreateConfigFromOptions(opts *Options) (*genericserver.GRPCServerConfig[ServiceFactory, StoreFactory], error) {
+func CreateConfigFromOptions(opts *Options) (*genericserver.GRPCServerConfig[Factory, DemoEndpoints, ServiceFactory, StoreFactory], error) {
 	errs := make([]error, 0)
 	errs = append(errs, opts.GRPCServerRunOptions.Validate()...)
 	errs = append(errs, opts.GRPCServingOptions.Validate()...)
@@ -57,14 +57,14 @@ func CreateConfigFromOptions(opts *Options) (*genericserver.GRPCServerConfig[Ser
 		return nil, err
 	}
 
-	cfg := genericserver.NewGRPCServerConfig[ServiceFactory, StoreFactory]()
+	cfg := genericserver.NewGRPCServerConfig[Factory, DemoEndpoints, ServiceFactory, StoreFactory]()
 	if err := opts.GRPCServerRunOptions.ApplyTo(cfg); err != nil {
 		return nil, err
 	}
 	if err := opts.GRPCServingOptions.ApplyTo(cfg); err != nil {
 		return nil, err
 	}
-	if err := opts.InsecureServingOptions.ApplyToGRPCConfig(cfg); err != nil {
+	if err := genericoptions.ApplyInsecureServingToGRPCConfig(opts.InsecureServingOptions, cfg); err != nil {
 		return nil, err
 	}
 
@@ -76,9 +76,8 @@ func CreateConfigFromOptions(opts *Options) (*genericserver.GRPCServerConfig[Ser
 }
 
 // NewServer builds a generic gRPC server from the config and business hooks.
-func NewServer(ctx context.Context, cfg *genericserver.GRPCServerConfig[ServiceFactory, StoreFactory]) *genericserver.GenericGRPCServer[Factory, DemoEndpoints, ServiceFactory, StoreFactory] {
-	completed := cfg.Complete()
-	return genericserver.NewGRPCServer[Factory, DemoEndpoints, ServiceFactory, StoreFactory](ctx, completed, NewBizHooks())
+func NewServer(ctx context.Context, cfg *genericserver.GRPCServerConfig[Factory, DemoEndpoints, ServiceFactory, StoreFactory]) *genericserver.GenericGRPCServer[Factory, DemoEndpoints, ServiceFactory, StoreFactory] {
+	return cfg.Complete().NewGRPCServer(ctx, NewBizHooks())
 }
 
 // Run wires options -> config -> server and runs until shutdown.
