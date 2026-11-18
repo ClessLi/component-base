@@ -16,4 +16,5 @@
 | `codegen`        | codegen 代码生成工具相关的变更        |
 | `pkg`            | pkg 公共包其他变更                |
 | `docs`           | 文档类变更                      |
+| `changelog`      | CHANGELOG 的变更              |
 | `chore`          | 构建/工具/依赖等杂项变更              |
