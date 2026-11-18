@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/url"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 
+	logV1 "github.com/ClessLi/component-base/pkg/log/v1"
 	kitlog "github.com/go-kit/kit/log"
 	kitzaplog "github.com/go-kit/kit/log/zap"
 	"go.uber.org/zap"
@@ -96,15 +99,61 @@ func (c *captureLogger) Len() int {
 	return len(lines)
 }
 
-// TestMain initializes logger for all tests
+// In-memory log sinks for tests. Zap keeps sink handles open for the process
+// lifetime, so real log files would stay locked on Windows and break temp-dir
+// cleanup; registered URL sinks avoid the filesystem entirely.
+var (
+	testSinkMu sync.Mutex
+	testSinks  = make(map[string]*bytes.Buffer)
+)
+
+// memorySink is a zap.Sink writing into a named in-memory buffer.
+type memorySink struct{ name string }
+
+func (s memorySink) Write(p []byte) (int, error) {
+	testSinkMu.Lock()
+	defer testSinkMu.Unlock()
+	buf, ok := testSinks[s.name]
+	if !ok {
+		buf = &bytes.Buffer{}
+		testSinks[s.name] = buf
+	}
+	return buf.Write(p)
+}
+
+func (s memorySink) Sync() error  { return nil }
+func (s memorySink) Close() error { return nil }
+
+// testSinkOutput returns the current output of the named in-memory sink.
+func testSinkOutput(name string) string {
+	testSinkMu.Lock()
+	defer testSinkMu.Unlock()
+	if buf, ok := testSinks[name]; ok {
+		return buf.String()
+	}
+	return ""
+}
+
+// initLogToBuffer re-initializes the global log/v1 logger to write into the
+// named in-memory sink (URL scheme registered in TestMain).
+func initLogToBuffer(name string) {
+	opts := logV1.NewOptions()
+	opts.OutputPaths = []string{"methodlogtest://" + name}
+	opts.ErrorOutputPaths = opts.OutputPaths
+	logV1.Init(opts)
+}
+
+// TestMain registers the in-memory sink scheme and routes global log output
+// into it, so tests stay quiet while exercising the lazy per-Do logger
+// resolution against real log/v1 state.
 func TestMain(m *testing.M) {
-	// Initialize loggers with level-specific capture loggers for testing
-	// This simulates production behavior where different log levels are used
-	// Using Zap levels: InfoLevel(0), ErrorLevel(-2 equivalent), PanicLevel(-4 equivalent)
-	infoLogger = NewCaptureLoggerWithLevel(zapcore.InfoLevel)
-	errorLogger = NewCaptureLoggerWithLevel(zapcore.ErrorLevel)
-	panicLogger = NewCaptureLoggerWithLevel(zapcore.PanicLevel)
-	limit = 200
+	err := zap.RegisterSink("methodlogtest", func(u *url.URL) (zap.Sink, error) {
+		return memorySink{name: u.Host}, nil
+	})
+	if err != nil {
+		panic(err)
+	}
+	initLogToBuffer("main")
 
 	m.Run()
 }
@@ -301,6 +350,37 @@ func TestResult(t *testing.T) {
 
 		if !checkedError {
 			t.Error("Builder should have been executed")
+		}
+	})
+
+	t.Run("legacy contract: closure sees outer error assigned inside Action", func(t *testing.T) {
+		// Regression for the documented Result contract: the closure captures
+		// a caller-side variable, which must be assigned INSIDE Action because
+		// the builder runs in Do's defer before Do returns.
+		wantErr := fmt.Errorf("legacy action failure")
+		var actionErr error
+
+		builder := New(ctx, func() error { return wantErr }).
+			Result(func() string {
+				if actionErr != nil {
+					return "request failed"
+				}
+				return "request processed"
+			}).
+			Action(func(method func() error) error {
+				actionErr = method()
+				return actionErr
+			})
+
+		err := builder.Do()
+
+		if err != wantErr {
+			t.Errorf("Expected error %v from Do(), got %v", wantErr, err)
+		}
+		if builder.formatter == nil {
+			t.Error("formatter should not be nil after Do")
+		} else if builder.formatter.result != "request failed" {
+			t.Errorf("Expected result 'request failed', got %v", builder.formatter.result)
 		}
 	})
 }
@@ -879,5 +959,421 @@ func TestCaptureLoggerWithLevels(t *testing.T) {
 
 		// Note: We don't test PanicLevel here because it would cause the test to panic
 		// In production, PanicLevel is used with proper defer/recover handling
+	})
+}
+
+// TestResultWithError verifies ResultWithError receives Do's final error
+func TestResultWithError(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("receives action error without outer assignment", func(t *testing.T) {
+		// Minimal repro: Action returns method() directly, the caller-side
+		// variable is never assigned inside Action. ResultWithError must still
+		// see the final error via Do's named return value.
+		wantErr := fmt.Errorf("action failed")
+		var gotErr error
+
+		builder := New(ctx, func() error { return wantErr }).
+			ResultWithError(func(err error) string {
+				gotErr = err
+				if err != nil {
+					return "request failed"
+				}
+				return "request processed"
+			}).
+			Action(func(method func() error) error {
+				return method()
+			})
+
+		err := builder.Do()
+
+		if err != wantErr {
+			t.Errorf("Expected error %v from Do(), got %v", wantErr, err)
+		}
+		if gotErr != wantErr {
+			t.Errorf("Expected builder to receive error %v, got %v", wantErr, gotErr)
+		}
+		if builder.formatter == nil {
+			t.Error("formatter should not be nil after Do")
+		} else if builder.formatter.result != "request failed" {
+			t.Errorf("Expected result 'request failed', got %v", builder.formatter.result)
+		}
+	})
+
+	t.Run("receives nil on success", func(t *testing.T) {
+		gotErr := fmt.Errorf("sentinel")
+
+		builder := New(ctx, func() error { return nil }).
+			ResultWithError(func(err error) string {
+				gotErr = err
+				if err != nil {
+					return "request failed"
+				}
+				return "request processed"
+			}).
+			Action(func(method func() error) error {
+				return method()
+			})
+
+		err := builder.Do()
+
+		if err != nil {
+			t.Errorf("Do() returned unexpected error: %v", err)
+		}
+		if gotErr != nil {
+			t.Errorf("Expected builder to receive nil error, got %v", gotErr)
+		}
+		if builder.formatter == nil {
+			t.Error("formatter should not be nil after Do")
+		} else if builder.formatter.result != "request processed" {
+			t.Errorf("Expected result 'request processed', got %v", builder.formatter.result)
+		}
+	})
+
+	t.Run("ResultWithError overrides previous Result", func(t *testing.T) {
+		legacyCalled := false
+
+		builder := New(ctx, func() {}).
+			Result(func() string {
+				legacyCalled = true
+				return "legacy"
+			}).
+			ResultWithError(func(err error) string {
+				return "with-error"
+			}).
+			Action(func(method func()) error {
+				method()
+				return nil
+			})
+
+		if err := builder.Do(); err != nil {
+			t.Errorf("Do() returned unexpected error: %v", err)
+		}
+		if legacyCalled {
+			t.Error("Overridden Result builder should not be called")
+		}
+		if builder.formatter == nil || builder.formatter.result != "with-error" {
+			t.Errorf("Expected result 'with-error' (last builder wins), got %v", builder.formatter.result)
+		}
+	})
+
+	t.Run("Result overrides previous ResultWithError", func(t *testing.T) {
+		errBuilderCalled := false
+
+		builder := New(ctx, func() {}).
+			ResultWithError(func(err error) string {
+				errBuilderCalled = true
+				return "with-error"
+			}).
+			Result(func() string {
+				return "legacy"
+			}).
+			Action(func(method func()) error {
+				method()
+				return nil
+			})
+
+		if err := builder.Do(); err != nil {
+			t.Errorf("Do() returned unexpected error: %v", err)
+		}
+		if errBuilderCalled {
+			t.Error("Overridden ResultWithError builder should not be called")
+		}
+		if builder.formatter == nil || builder.formatter.result != "legacy" {
+			t.Errorf("Expected result 'legacy' (last builder wins), got %v", builder.formatter.result)
+		}
+	})
+
+	t.Run("nil builder returns same instance", func(t *testing.T) {
+		builder := New(ctx, func() {})
+		result := builder.ResultWithError(nil)
+
+		if result != builder {
+			t.Error("ResultWithError(nil) should return the same builder instance")
+		}
+	})
+}
+
+// TestDoPanicWithInjectedLogger verifies the panic path: the panic record is
+// logged, Do returns nil and ResultWithError receives nil. An Info-level
+// injected logger is used because the default PanicLevel zap logger re-panics
+// after writing (existing bridge behavior, preserved by this package).
+func TestDoPanicWithInjectedLogger(t *testing.T) {
+	captureLog := NewCaptureLogger()
+	gotErr := fmt.Errorf("sentinel")
+
+	builder := New(context.Background(), func() {}, WithLogger(captureLog)).
+		ResultWithError(func(err error) string {
+			gotErr = err
+			return "panic recovered"
+		}).
+		Action(func(method func()) error {
+			panic("boom")
+		})
+
+	err := builder.Do()
+
+	if err != nil {
+		t.Errorf("Expected Do() to swallow the panic and return nil, got %v", err)
+	}
+	if gotErr != nil {
+		t.Errorf("Expected ResultWithError to receive nil on panic, got %v", gotErr)
+	}
+	if builder.formatter == nil {
+		t.Fatal("formatter should not be nil after Do")
+	}
+	if builder.formatter.panicValue != "boom" {
+		t.Errorf("Expected panicValue 'boom', got %v", builder.formatter.panicValue)
+	}
+	if builder.formatter.result != "panic recovered" {
+		t.Errorf("Expected result 'panic recovered', got %v", builder.formatter.result)
+	}
+	// Panic record is logged immediately, then the final entry is emitted
+	if !captureLog.Contains(`"panic":"boom"`) {
+		t.Errorf("Expected panic record in captured output, got: %s", captureLog.GetOutput())
+	}
+	if !captureLog.Contains(`"result":"panic recovered"`) {
+		t.Errorf("Expected result message in captured output, got: %s", captureLog.GetOutput())
+	}
+	if captureLog.Len() != 2 {
+		t.Errorf("Expected 2 log lines (panic record + final entry), got %d: %s", captureLog.Len(), captureLog.GetOutput())
+	}
+}
+
+// TestLoggerFollowsLogInit verifies that log output destinations follow the
+// host's log.Init re-initialization (minimal repro: stale package-level
+// loggers kept writing to the old destination).
+func TestLoggerFollowsLogInit(t *testing.T) {
+	ctx := context.Background()
+
+	// Restore the quiet main sink for subsequent tests
+	defer initLogToBuffer("main")
+
+	initLogToBuffer("dest-a")
+	err := New(ctx, func() {}).
+		AddInfos(func() []interface{} {
+			return []interface{}{"marker", "first-destination"}
+		}).
+		Action(func(method func()) error {
+			method()
+			return nil
+		}).Do()
+	if err != nil {
+		t.Fatalf("Do() returned unexpected error: %v", err)
+	}
+
+	contentA := testSinkOutput("dest-a")
+	if !strings.Contains(contentA, "first-destination") {
+		t.Errorf("Expected first log in destination A, got: %s", contentA)
+	}
+
+	// Re-initialize logging to another destination; a new Do must follow it
+	initLogToBuffer("dest-b")
+	err = New(ctx, func() {}).
+		AddInfos(func() []interface{} {
+			return []interface{}{"marker", "second-destination"}
+		}).
+		Action(func(method func()) error {
+			method()
+			return nil
+		}).Do()
+	if err != nil {
+		t.Fatalf("Do() returned unexpected error: %v", err)
+	}
+
+	contentB := testSinkOutput("dest-b")
+	if !strings.Contains(contentB, "second-destination") {
+		t.Errorf("Expected second log in destination B after log.Init, got: %s", contentB)
+	}
+
+	contentA = testSinkOutput("dest-a")
+	if strings.Contains(contentA, "second-destination") {
+		t.Errorf("Second log should not appear in old destination A, got: %s", contentA)
+	}
+}
+
+// TestWithLogger verifies that an injected logger captures all output of a Do
+func TestWithLogger(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("captures result and error fields on failure", func(t *testing.T) {
+		captureLog := NewCaptureLogger()
+		wantErr := fmt.Errorf("boom error")
+
+		err := New(ctx, func() {}, WithLogger(captureLog)).
+			ResultWithError(func(err error) string {
+				if err != nil {
+					return "request failed"
+				}
+				return "request processed"
+			}).
+			Action(func(method func()) error {
+				return wantErr
+			}).Do()
+
+		if err != wantErr {
+			t.Errorf("Expected error %v from Do(), got %v", wantErr, err)
+		}
+		if !captureLog.Contains(`"result":"request failed"`) {
+			t.Errorf("Expected result field in captured output, got: %s", captureLog.GetOutput())
+		}
+		if !captureLog.Contains(`"error":"boom error"`) {
+			t.Errorf("Expected error field in captured output, got: %s", captureLog.GetOutput())
+		}
+	})
+
+	t.Run("captures result field on success", func(t *testing.T) {
+		captureLog := NewCaptureLogger()
+
+		err := New(ctx, func() {}, WithLogger(captureLog)).
+			ResultWithError(func(err error) string {
+				return "request processed"
+			}).
+			Action(func(method func()) error {
+				method()
+				return nil
+			}).Do()
+
+		if err != nil {
+			t.Errorf("Do() returned unexpected error: %v", err)
+		}
+		if !captureLog.Contains(`"result":"request processed"`) {
+			t.Errorf("Expected result field in captured output, got: %s", captureLog.GetOutput())
+		}
+		if captureLog.Contains(`"error":`) {
+			t.Errorf("Expected no error field on success, got: %s", captureLog.GetOutput())
+		}
+	})
+
+	t.Run("nil logger falls back to lazy resolution", func(t *testing.T) {
+		builder := New(ctx, func() {}, WithLogger(nil)).
+			Action(func(method func()) error {
+				method()
+				return nil
+			})
+
+		if err := builder.Do(); err != nil {
+			t.Errorf("Do() returned unexpected error: %v", err)
+		}
+		if builder.formatter == nil {
+			t.Fatal("formatter should not be nil after Do")
+		}
+		if builder.formatter.infoLogger == nil || builder.formatter.errorLogger == nil || builder.formatter.panicLogger == nil {
+			t.Error("Level loggers should be lazily resolved when no logger is injected")
+		}
+	})
+}
+
+// TestCallSite verifies the callsite field points to the business call site
+// where New is invoked (not to component internals), in short
+// package/file.go:line form, on both the normal and the panic path.
+func TestCallSite(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("final entry carries caller's file and line", func(t *testing.T) {
+		captureLog := NewCaptureLogger()
+
+		_, _, line, ok := runtime.Caller(0)
+		builder := New(ctx, func() {}, WithLogger(captureLog)) // must stay on the line right after runtime.Caller(0)
+		if !ok {
+			t.Fatal("runtime.Caller(0) failed")
+		}
+		err := builder.Action(func(method func()) error {
+			method()
+			return nil
+		}).Do()
+		if err != nil {
+			t.Fatalf("Do() returned unexpected error: %v", err)
+		}
+
+		expected := fmt.Sprintf(`"callsite":"v1/builder_test.go:%d"`, line+1)
+		if !captureLog.Contains(expected) {
+			t.Errorf("Expected callsite %s in captured output, got: %s", expected, captureLog.GetOutput())
+		}
+	})
+
+	t.Run("panic record and final entry both carry callsite", func(t *testing.T) {
+		captureLog := NewCaptureLogger()
+
+		_, _, line, ok := runtime.Caller(0)
+		builder := New(ctx, func() {}, WithLogger(captureLog)) // must stay on the line right after runtime.Caller(0)
+		if !ok {
+			t.Fatal("runtime.Caller(0) failed")
+		}
+		err := builder.Action(func(method func()) error {
+			panic("boom")
+		}).Do()
+		if err != nil {
+			t.Fatalf("Expected Do() to swallow the panic and return nil, got %v", err)
+		}
+
+		expected := fmt.Sprintf(`"callsite":"v1/builder_test.go:%d"`, line+1)
+		if n := strings.Count(captureLog.GetOutput(), expected); n != 2 {
+			t.Errorf("Expected callsite %s on both log lines, found %d: %s", expected, n, captureLog.GetOutput())
+		}
+	})
+}
+
+// TestConcurrentDo verifies concurrent Do calls are safe under -race
+func TestConcurrentDo(t *testing.T) {
+	const workers = 20
+
+	t.Run("with injected logger", func(t *testing.T) {
+		captureLog := NewCaptureLogger()
+		var wg sync.WaitGroup
+
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func(id int) {
+				defer wg.Done()
+				err := New(context.Background(), func() {}, WithLogger(captureLog)).
+					AddInfos(func() []interface{} {
+						return []interface{}{"gid", id}
+					}).
+					ResultWithError(func(err error) string {
+						return "concurrent ok"
+					}).
+					Action(func(method func()) error {
+						method()
+						return nil
+					}).Do()
+				if err != nil {
+					t.Errorf("Do() returned unexpected error: %v", err)
+				}
+			}(i)
+		}
+		wg.Wait()
+
+		if captureLog.Len() != workers {
+			t.Errorf("Expected %d log lines, got %d", workers, captureLog.Len())
+		}
+		if !captureLog.Contains(`"result":"concurrent ok"`) {
+			t.Errorf("Expected result message in captured output, got: %s", captureLog.GetOutput())
+		}
+	})
+
+	t.Run("with lazy resolution", func(t *testing.T) {
+		// No log.Init during this test: concurrent Do calls only read the
+		// global log state (Init/K() synchronization in log/v1 is out of scope).
+		var wg sync.WaitGroup
+
+		for i := 0; i < workers; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				err := New(context.Background(), func() {}).
+					ResultWithError(func(err error) string {
+						return "lazy ok"
+					}).
+					Action(func(method func()) error {
+						method()
+						return nil
+					}).Do()
+				if err != nil {
+					t.Errorf("Do() returned unexpected error: %v", err)
+				}
+			}()
+		}
+		wg.Wait()
 	})
 }

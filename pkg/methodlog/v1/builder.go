@@ -19,10 +19,45 @@
 //	        return h.ServeHTTP(w, r)
 //	    }).
 //	    Do()
+//
+// Result closure contract:
+// Result/ResultWithError builders run inside Do's defer, BEFORE Do returns to
+// the caller. When a closure captures the caller's own variable (e.g. the
+// variable assigned by `err = ...Do()`), that assignment has not happened yet,
+// so the closure must rely on values assigned INSIDE Action. To branch the
+// result message on the final error returned by Do, prefer ResultWithError,
+// which receives that error directly:
+//
+//	err := methodlog.New(ctx, method).
+//	    Action(func(m MethodType) error {
+//	        return m(args) // no outer assignment needed
+//	    }).
+//	    ResultWithError(func(err error) string {
+//	        if err != nil {
+//	            return "request failed"
+//	        }
+//	        return "request processed"
+//	    }).
+//	    Do()
+//
+// Log output destinations follow the host's log.Init: level loggers are
+// resolved lazily on each Do. Hosts should complete log.Init before starting
+// concurrent logging (log/v1 Init/K() synchronization is out of scope here).
+//
+// Caller semantics:
+// The logging backend's own "caller" field reports a position INSIDE this
+// package (the deferred closure in Do), not the business call site, because
+// entries are emitted from Do's defer through several wrapper layers. New
+// therefore captures the business call site up front and every entry carries
+// it as the "callsite" field (package/file.go:line). Prefer "callsite" or
+// "method" when locating business code.
 package v1
 
 import (
 	"context"
+	"runtime"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ClessLi/component-base/pkg/errors"
@@ -43,12 +78,17 @@ type infosBuilder func() []interface{}
 // It allows access to closure-captured variables modified during execution
 type resultBuilder func() string
 
+// resultErrBuilder defines a result message builder that receives the final
+// error returned by Do (nil on success or when the action panicked).
+// It is the internal result slot shared by Result and ResultWithError.
+type resultErrBuilder func(err error) string
+
 // executor encapsulates the execution logic and configuration for logging middleware.
 // It separates concerns: configuration collection vs. execution orchestration.
 type executor[M any] struct {
-	action        Action[M]     // action is the function to execute with logging
-	infosBuilder  infosBuilder  // infosBuilder generates additional log key-value pairs
-	resultBuilder resultBuilder // resultBuilder generates the result message
+	action        Action[M]        // action is the function to execute with logging
+	infosBuilder  infosBuilder     // infosBuilder generates additional log key-value pairs
+	resultBuilder resultErrBuilder // resultBuilder generates the result message, receiving the final error
 }
 
 // addInfos appends a builder function that generates log key-value pairs.
@@ -71,12 +111,29 @@ func (e *executor[M]) addInfos(builder infosBuilder) *executor[M] {
 // setResult sets the result message builder function.
 // Unlike addInfos, multiple calls replace previous builder (last one wins).
 // The builder executes in defer block after method completion.
-func (e *executor[M]) setResult(builder resultBuilder) *executor[M] {
+func (e *executor[M]) setResult(builder resultErrBuilder) *executor[M] {
 	if builder == nil {
 		return e
 	}
 	e.resultBuilder = builder
 	return e
+}
+
+// callerSite renders the caller's position at the given runtime.Caller skip
+// in short form (package/file.go:line), mirroring zapcore.ShortCallerEncoder.
+// It returns an empty string when the position is unavailable.
+func callerSite(skip int) string {
+	_, file, line, ok := runtime.Caller(skip)
+	if !ok {
+		return ""
+	}
+	// Keep only the last two path segments; runtime.Caller always uses slashes.
+	if idx := strings.LastIndex(file, "/"); idx >= 0 {
+		if prev := strings.LastIndex(file[:idx], "/"); prev >= 0 {
+			file = file[prev+1:]
+		}
+	}
+	return file + ":" + strconv.Itoa(line)
 }
 
 // Builder provides a fluent API for constructing logging middleware with panic recovery.
@@ -98,16 +155,22 @@ type Builder[M any] struct {
 	formatter *formatter      // formatter holds log output state
 	exec      *executor[M]    // exec holds execution configuration
 	opts      []Option        // opts holds formatter configuration options
+	callsite  string          // callsite is the business call site captured in New
 }
 
 // New creates a new Builder instance with initialized executor.
 // Optional opts can be provided to configure field extractors.
+// It also captures the caller's position (the business call site) so log
+// entries can carry it as the "callsite" field; see package docs on caller
+// semantics. If New is wrapped by another helper, the captured position is
+// that helper's call site.
 func New[M any](ctx context.Context, method M, opts ...Option) *Builder[M] {
 	return &Builder[M]{
-		ctx:    ctx,
-		method: method,
-		exec:   new(executor[M]),
-		opts:   opts,
+		ctx:      ctx,
+		method:   method,
+		exec:     new(executor[M]),
+		opts:     opts,
+		callsite: callerSite(2), // skip callerSite and New to reach the caller
 	}
 }
 
@@ -120,8 +183,8 @@ func New[M any](ctx context.Context, method M, opts ...Option) *Builder[M] {
 // Returns error from action execution or ErrActionNotSet if action is nil
 func (b *Builder[M]) Do() (err error) {
 	defer func(begin time.Time) {
-		// Initialize formatter with context, method info, and options
-		b.formatter = newFormatter(b.ctx, b.method, b.opts...)
+		// Initialize formatter with context, method info, call site, and options
+		b.formatter = newFormatter(b.ctx, b.method, b.callsite, b.opts...)
 		b.formatter.setStartTime(begin)
 		b.formatter.recoverPanic(recover())
 
@@ -136,9 +199,10 @@ func (b *Builder[M]) Do() (err error) {
 			b.formatter.addInfos(b.exec.infosBuilder()...)
 		}
 
-		// Execute result message builder if configured
+		// Execute result message builder if configured, passing Do's final
+		// named return value (nil when the action panicked)
 		if b.exec.resultBuilder != nil {
-			b.formatter.setResult(b.exec.resultBuilder())
+			b.formatter.setResult(b.exec.resultBuilder(err))
 		}
 
 		// Apply default result message if none was set and no panic occurred
@@ -177,8 +241,14 @@ func (b *Builder[M]) Action(action Action[M]) *Builder[M] {
 // The builder function executes after method completion in the defer block,
 // allowing access to closure-captured variables modified during execution
 //
-// Note: Multiple calls replace previous builder (last one wins)
-// For conditional logic, check b.formatter.err inside the builder if needed
+// Contract: the builder runs inside Do's defer, before Do returns. A closure
+// capturing the caller's variable assigned by `err = ...Do()` still sees the
+// old value (typically nil); captured variables must be assigned INSIDE Action.
+// To branch on the final error without such assignment, use ResultWithError.
+//
+// Note: Multiple calls replace previous builder (last one wins), shared with
+// ResultWithError. For conditional logic, check b.formatter.err inside the
+// builder if needed
 //
 // Example:
 //
@@ -191,11 +261,47 @@ func (b *Builder[M]) Action(action Action[M]) *Builder[M] {
 //	        return "success"
 //	    }).
 //	    Action(func(m MethodType) error {
-//	        result, err = m(args)
+//	        result, err = m(args) // assign inside Action so the closure sees it
 //	        return err
 //	    }).
 //	    Do()
 func (b *Builder[M]) Result(builder resultBuilder) *Builder[M] {
+	if builder == nil {
+		return b
+	}
+	// Adapt to the shared error-aware slot; the final error is ignored
+	b.exec.setResult(func(error) string {
+		return builder()
+	})
+	return b
+}
+
+// ResultWithError configures a result message builder that receives the final
+// error returned by Do. Unlike Result, it does not require assigning captured
+// variables inside Action: the builder is invoked in Do's defer with Do's own
+// named return value, so `return method()` inside Action is enough.
+//
+// The error is nil on success and when the action panicked (panics are logged
+// separately via the panic logger). Shares the same result slot with Result:
+// multiple calls replace the previous builder (last one wins).
+//
+// Example:
+//
+//	err := methodlog.New(ctx, method).
+//	    Action(func(m MethodType) error {
+//	        return m(args)
+//	    }).
+//	    ResultWithError(func(err error) string {
+//	        if err != nil {
+//	            return fmt.Sprintf("request failed: %v", err)
+//	        }
+//	        return "request processed"
+//	    }).
+//	    Do()
+func (b *Builder[M]) ResultWithError(builder func(err error) string) *Builder[M] {
+	if builder == nil {
+		return b
+	}
 	b.exec.setResult(builder)
 	return b
 }
