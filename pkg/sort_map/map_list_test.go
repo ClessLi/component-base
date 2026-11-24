@@ -116,7 +116,7 @@ func Test_mapList_UnmarshalJSON(t *testing.T) {
 			if tt.wantErr {
 				return
 			}
-			mlImpl := ml.(*mapList[string])
+			mlImpl := &ml
 			if len(mlImpl.dataMap) != len(tt.want) {
 				t.Errorf("UnmarshalJSON() dataMap length = %v, want %v", len(mlImpl.dataMap), len(tt.want))
 			}
@@ -143,7 +143,7 @@ func Test_mapList_UnmarshalJSON(t *testing.T) {
 			t.Errorf("UnmarshalJSON() unexpected error = %v", err)
 			return
 		}
-		mlImpl := ml.(*mapList[Data])
+		mlImpl := &ml
 		if len(mlImpl.dataMap) != 2 {
 			t.Errorf("UnmarshalJSON() dataMap length = %v, want 2", len(mlImpl.dataMap))
 		}
@@ -156,7 +156,7 @@ func Test_mapList_UnmarshalJSON(t *testing.T) {
 			t.Errorf("UnmarshalJSON() unexpected error = %v", err)
 			return
 		}
-		mlImpl := ml.(*mapList[string])
+		mlImpl := &ml
 		var keys []int
 		for _, k := range mlImpl.indexList.Range() {
 			keys = append(keys, k)
@@ -276,7 +276,7 @@ func Test_mapList_UnmarshalYAML(t *testing.T) {
 			if tt.wantErr {
 				return
 			}
-			mlImpl := ml.(*mapList[string])
+			mlImpl := &ml
 			if len(mlImpl.dataMap) != len(tt.want) {
 				t.Errorf("UnmarshalYAML() dataMap length = %v, want %v", len(mlImpl.dataMap), len(tt.want))
 			}
@@ -308,7 +308,7 @@ func Test_mapList_UnmarshalYAML(t *testing.T) {
 			t.Errorf("UnmarshalYAML() unexpected error = %v", err)
 			return
 		}
-		mlImpl := ml.(*mapList[Data])
+		mlImpl := &ml
 		if len(mlImpl.dataMap) != 2 {
 			t.Errorf("UnmarshalYAML() dataMap length = %v, want 2", len(mlImpl.dataMap))
 		}
@@ -326,7 +326,7 @@ func Test_mapList_UnmarshalYAML(t *testing.T) {
 			t.Errorf("UnmarshalYAML() unexpected error = %v", err)
 			return
 		}
-		mlImpl := ml.(*mapList[string])
+		mlImpl := &ml
 		var keys []int
 		for _, k := range mlImpl.indexList.Range() {
 			keys = append(keys, k)
@@ -357,42 +357,46 @@ func Test_mapList_Remove(t *testing.T) {
 	}
 	type testCase[V any] struct {
 		name         string
-		m            *mapList[V]
+		m            *MapList[V]
 		args         args
 		wantLenAfter int
 	}
 	tests := []testCase[string]{
 		{
 			name:         "remove from empty list",
-			m:            List[string]().(*mapList[string]),
+			m:            func() *MapList[string] { ml := List[string](); return &ml }(),
 			args:         args{index: 0},
 			wantLenAfter: 0,
 		},
 		{
-			name:         "remove negative index - no-op",
-			m:            func() *mapList[string] { ml := List[string]().(*mapList[string]); ml.Append("a"); return ml }(),
+			name: "remove negative index - no-op",
+			m: func() *MapList[string] {
+				ml := List[string]()
+				ml.Append("a")
+				return &ml
+			}(),
 			args:         args{index: -1},
 			wantLenAfter: 1,
 		},
 		{
 			name: "remove existing index",
-			m: func() *mapList[string] {
-				ml := List[string]().(*mapList[string])
+			m: func() *MapList[string] {
+				ml := List[string]()
 				ml.Append("a")
 				ml.Append("b")
 				ml.Append("c")
-				return ml
+				return &ml
 			}(),
 			args:         args{index: 1},
 			wantLenAfter: 2,
 		},
 		{
 			name: "remove non-existing index",
-			m: func() *mapList[string] {
-				ml := List[string]().(*mapList[string])
+			m: func() *MapList[string] {
+				ml := List[string]()
 				ml.Append("a")
 				ml.Append("b")
-				return ml
+				return &ml
 			}(),
 			args:         args{index: 10},
 			wantLenAfter: 2,
@@ -421,7 +425,7 @@ func Test_mapList_Contains(t *testing.T) {
 	tests := []testCase{
 		{
 			name:        "empty list - not present",
-			m:           List[string](),
+			m:           func() MapList[string] { ml := List[string](); return ml }(),
 			args:        args{index: 0},
 			wantPresent: false,
 		},
