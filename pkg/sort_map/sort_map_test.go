@@ -11,8 +11,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func newTestSortMap[K cmp.Ordered, V any](data map[K]V) sortMap[K, V] {
-	sm := sortMap[K, V]{
+func newTestSortMap[K cmp.Ordered, V any](data map[K]V) SortMap[K, V] {
+	sm := SortMap[K, V]{
 		mu:        new(sync.RWMutex),
 		dataMap:   make(map[K]V),
 		indexList: NewMapIndexes[K](),
@@ -30,7 +30,7 @@ func Test_sortMap_GetByKey(t *testing.T) {
 	}
 	type testCase struct {
 		name   string
-		s      sortMap[int, string]
+		s      SortMap[int, string]
 		args   args
 		wantV  string
 		wantOk bool
@@ -102,7 +102,7 @@ func Test_sortMap_GetByKey(t *testing.T) {
 func Test_sortMap_Indexes(t *testing.T) {
 	type testCase struct {
 		name     string
-		s        sortMap[int, string]
+		s        SortMap[int, string]
 		wantIdxs []int
 	}
 	tests := []testCase{
@@ -241,7 +241,7 @@ func Test_sortMap_Set(t *testing.T) {
 func Test_sortMap_Keys(t *testing.T) {
 	type testCase struct {
 		name     string
-		s        sortMap[int, string]
+		s        SortMap[int, string]
 		wantKeys []int
 	}
 	tests := []testCase{
@@ -311,7 +311,7 @@ func Test_sortMap_Keys(t *testing.T) {
 func Test_sortMap_Range(t *testing.T) {
 	type testCase struct {
 		name     string
-		s        sortMap[int, string]
+		s        SortMap[int, string]
 		wantKeys []int
 		wantVals []string
 	}
@@ -403,7 +403,7 @@ func Test_sortMap_Range(t *testing.T) {
 func Test_sortMap_RangeWithIndex(t *testing.T) {
 	type testCase struct {
 		name     string
-		s        sortMap[int, string]
+		s        SortMap[int, string]
 		wantIdxs []int
 		wantVals []string
 	}
@@ -1267,7 +1267,7 @@ func Test_sortMap_ConcurrentAccess(t *testing.T) {
 func Test_sortMap_MarshalJSON(t *testing.T) {
 	type testCase struct {
 		name    string
-		s       sortMap[int, string]
+		s       SortMap[int, string]
 		want    []byte
 		wantErr bool
 	}
@@ -1375,7 +1375,7 @@ func Test_sortMap_MarshalJSON(t *testing.T) {
 func Test_sortMap_MarshalYAML(t *testing.T) {
 	type testCase struct {
 		name    string
-		s       sortMap[int, string]
+		s       SortMap[int, string]
 		want    interface{}
 		wantErr bool
 	}
@@ -1889,7 +1889,7 @@ func Test_sortMap_Contains(t *testing.T) {
 	}
 	type testCase[K cmp.Ordered, V any] struct {
 		name        string
-		s           sortMap[K, V]
+		s           SortMap[K, V]
 		args        args[K]
 		wantPresent bool
 	}
@@ -1961,7 +1961,7 @@ func Test_sortMap_Contains(t *testing.T) {
 func Test_sortMap_Clear(t *testing.T) {
 	type testCase[K cmp.Ordered, V any] struct {
 		name string
-		s    sortMap[K, V]
+		s    SortMap[K, V]
 	}
 	tests := []testCase[int, string]{
 		{
@@ -1987,7 +1987,7 @@ func Test_sortMap_Clear(t *testing.T) {
 func Test_sortMap_Len(t *testing.T) {
 	type testCase[K cmp.Ordered, V any] struct {
 		name string
-		s    sortMap[K, V]
+		s    SortMap[K, V]
 		want int
 	}
 	tests := []testCase[int, string]{
@@ -2019,7 +2019,7 @@ func Test_sortMap_Len(t *testing.T) {
 func Test_sortMap_Values(t *testing.T) {
 	type testCase[K cmp.Ordered, V any] struct {
 		name string
-		s    sortMap[K, V]
+		s    SortMap[K, V]
 		want []V
 	}
 	tests := []testCase[int, string]{
